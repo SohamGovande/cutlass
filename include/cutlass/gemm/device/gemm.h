@@ -525,7 +525,6 @@ namespace cutlass
               return Status::kErrorInternal;
             }
           }
-
           cutlass::arch::synclog_setup();
           GlobalGemmKernel<GemmKernel><<<grid, block, smem_size, stream>>>(params_);
 

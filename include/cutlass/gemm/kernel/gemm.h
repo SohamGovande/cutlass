@@ -737,15 +737,19 @@ namespace cutlass
               MmaOperandB const *ptr_B = reinterpret_cast<MmaOperandB const *>(&pipe_state.warp_transformed_frag_B_[warp_mma_k % 2]);
               MmaOperandC *ptr_D = reinterpret_cast<MmaOperandC *>(&accumulators);
 
-              // MmaIterations::kRow = 4, MmaIterations::kColumn = 8
               CUTLASS_PRAGMA_UNROLL
-              for (int m = 0; m < MmaIterations::kRow; ++m)
+              for (int n = 0; n < MmaIterations::kColumn; ++n)
               {
-                //
+                // B size = 16 x 16 at this point
                 CUTLASS_PRAGMA_UNROLL
-                for (int n = 0; n < MmaIterations::kColumn; ++n)
+                for (int m = 0; m < MmaIterations::kRow; ++m)
                 {
-
+                  // MmaIterations::kRow = 4, MmaIterations::kColumn = 8
+                  // A = (256/4) x 16 = 64 x 16
+                  // B = 16 x (128/8) = 16 x 16
+                  // WarpMatMul: 64 x 16 x 16
+                  // ArchMmaOp:  16 x  8 x 16
+                  // # warps:      4 x 2    = 8
                   int n_serpentine = ((m % 2) ? (MmaIterations::kColumn - 1 - n) : n);
 
                   arch_mma_op(ptr_D[m + n_serpentine * MmaIterations::kRow],
