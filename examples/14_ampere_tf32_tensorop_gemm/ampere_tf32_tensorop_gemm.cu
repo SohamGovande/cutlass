@@ -269,7 +269,7 @@ int run(Options &options) {
   cutlass::reference::host::TensorFill(
       tensor_ref_d.host_view());  // <- fill matrix D for reference on host with zeros
   cutlass::reference::host::TensorFill(
-      tensor_sparsity_b.host_view(), uint8_t(1));  // <- fill matrix sparsity_b on host with ones
+      tensor_sparsity_b.host_view(), uint8_t(0xFF));  // <- fill matrix sparsity_b on host with ones
 
   // Copy data from host to GPU
   tensor_a.sync_device();
