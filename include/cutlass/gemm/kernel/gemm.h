@@ -57,6 +57,14 @@
 #include "cutlass/layout/tensor_op_multiplicand_sm80.h"
 #include "cutlass/transform/pitch_linear_thread_map.h"
 #include "cutlass/matrix_shape.h"
+#include "cutlass/aligned_buffer.h"
+#include "cutlass/arch/memory.h"
+#include "cutlass/array.h"
+#include "cutlass/cutlass.h"
+#include "cutlass/gemm/gemm.h"
+#include "cutlass/matrix_shape.h"
+#include "cutlass/numeric_types.h"
+#include "cutlass/gemm/threadblock/mma_base.h"
 #include <type_traits>
 
 // Helper template to force a compile-time error
@@ -361,6 +369,7 @@ namespace cutlass
           using MmaType = cutlass::gemm::threadblock::MmaMultistage<ShapeMMAThreadBlock, IteratorA, SmemIteratorA, CacheOpA, IteratorB, SmemIteratorB, CacheOpB, ElementAccumulator, LayoutOutput, Policy, 3, SharedMemoryClear>;
           static_assert(std::is_same<MmaType, Mma>::value, "MmaType is not Mma");
 
+          // this invokes MmaMultistage(). You should inline the constructor and declare all fields as local variables.
           MmaType mma(shared_storage.main_loop, thread_idx, warp_idx, lane_idx);
 
           typename MmaType::FragmentC accumulators;
@@ -369,7 +378,7 @@ namespace cutlass
 
           if (!kSplitKSerial || gemm_k_iterations > 0)
           {
-            // Compute threadblock-scoped matrix multiply-add
+            // this invokes MmaMultistage::operator(). Your job is to inline this operator.
             mma(gemm_k_iterations, accumulators, iterator_A, iterator_B, accumulators);
           }
 
