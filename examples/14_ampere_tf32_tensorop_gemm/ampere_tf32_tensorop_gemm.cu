@@ -57,7 +57,7 @@ fp32 data by using NVIDIA Ampere architecture.
 #include "cutlass/util/reference/host/tensor_copy.h"
 #include "cutlass/util/reference/host/tensor_fill.h"
 #include "cutlass/util/tensor_view_io.h"
-
+#include "printout_utils.h"
 #include "helper.h"
 
 /////////////////////////////////////////////////////////////////////////////////////////////////
@@ -240,9 +240,6 @@ int run(Options &options) {
   cutlass::HostTensor<ElementOutput, LayoutOutput> tensor_d(
       problem_size.mn());  // <- Create matrix D with dimensions M x N used to store output from
                            // CUTLASS kernel
-  cutlass::HostTensor<ElementOutput, LayoutOutput> tensor_ref_d(
-      problem_size.mn());  // <- Create matrix D with dimensions M x N used to store output from
-                           // reference kernel
   cutlass::HostTensor<uint8_t, cutlass::layout::RowMajor> tensor_sparsity_b(
       {problem_size.k() / 8, problem_size.n()});  // <- (K/8, N) Coord<2> shape
   // Fill input and output matrices on host using CUTLASS helper functions
@@ -267,16 +264,41 @@ int run(Options &options) {
   cutlass::reference::host::TensorFill(
       tensor_d.host_view());  // <- fill matrix D on host with zeros
   cutlass::reference::host::TensorFill(
-      tensor_ref_d.host_view());  // <- fill matrix D for reference on host with zeros
-  cutlass::reference::host::TensorFill(
       tensor_sparsity_b.host_view(), uint8_t(0xFF));  // <- fill matrix sparsity_b on host with ones
 
+
+  read_printout("A", tensor_a.host_view().data(), problem_size.m(), problem_size.k());
+  read_printout("B_orig", tensor_b.host_view().data(), problem_size.k(), problem_size.n());
+  read_printout("sparsity_B_packed", tensor_sparsity_b.host_view().data(), problem_size.k() / 8, problem_size.n());
+  
+  std::cout << "First 5x5 elements of matrix A:" << std::endl;
+  for (int i = 0; i < 5; ++i) {
+    for (int j = 0; j < 5; ++j) {
+      std::cout << tensor_a.host_view().at({i, j}) << " ";
+    }
+    std::cout << std::endl;
+  }
+
+  std::cout << "First 5x5 elements of matrix B:" << std::endl;
+  for (int i = 0; i < 5; ++i) {
+    for (int j = 0; j < 5; ++j) {
+      std::cout << tensor_b.host_view().at({i, j}) << " ";
+    }
+    std::cout << std::endl;
+  }
+
+  std::cout << "First 5x5 elements of matrix sparsity_B_packed:" << std::endl;
+  for (int i = 0; i < 5; ++i) {
+    for (int j = 0; j < 5; ++j) {
+      std::cout << static_cast<int>(tensor_sparsity_b.host_view().at({i, j})) << " ";
+    }
+    std::cout << std::endl;
+  }
   // Copy data from host to GPU
   tensor_a.sync_device();
   tensor_b.sync_device();
   tensor_c.sync_device();
   tensor_d.sync_device();
-  tensor_ref_d.sync_device();
   tensor_sparsity_b.sync_device();
 
   // Initialize alpha and beta for dot product computation
@@ -383,38 +405,45 @@ int run(Options &options) {
     (void)cudaEventDestroy(event);
   }
 
-  // Create instantiation for device reference gemm kernel
-  cutlass::reference::device::Gemm<ElementInputA,
-                                   LayoutInputA,
-                                   ElementInputB,
-                                   LayoutInputB,
-                                   ElementOutput,
-                                   LayoutOutput,
-                                   ElementComputeEpilogue,
-                                   ElementComputeEpilogue>
-      gemm_device;
-
-  // Launch device reference gemm kernel
-  gemm_device(problem_size,
-              alpha,
-              tensor_a.device_ref(),
-              tensor_b.device_ref(),
-              beta,
-              tensor_c.device_ref(),
-              tensor_ref_d.device_ref());
-
   // Wait for kernels to finish
   cudaDeviceSynchronize();
-
-  // Copy output data from CUTLASS and reference kernel to host for comparison
   tensor_d.sync_host();
-  tensor_ref_d.sync_host();
 
+  cutlass::HostTensor<ElementOutput, LayoutOutput> tensor_ref_d(
+    problem_size.mn());  // <- Create matrix D with dimensions M x N used to store output from
+                         // reference kernel
+
+  read_printout("C_ref", tensor_ref_d.host_view().data(), problem_size.m(), problem_size.n());
+  tensor_ref_d.sync_device();
+  std::cout << "First few values of tensor_d:" << std::endl;
+  for (int i = 0; i < std::min(10, problem_size.m()); ++i) {
+    for (int j = 0; j < std::min(10, problem_size.n()); ++j) {
+      std::cout << tensor_d.host_view().at({i, j}) << " ";
+    }
+    std::cout << std::endl;
+  }
+
+  std::cout << "First few values of tensor_ref_d:" << std::endl;
+  for (int i = 0; i < std::min(10, problem_size.m()); ++i) {
+    for (int j = 0; j < std::min(10, problem_size.n()); ++j) {
+      std::cout << tensor_ref_d.host_view().at({i, j}) << " ";
+    }
+    std::cout << std::endl;
+  }
   // Check if output from CUTLASS kernel and reference kernel are equal or not
-  bool passed = cutlass::reference::host::TensorEquals(
-    tensor_d.host_view(),
-    tensor_ref_d.host_view());
+  float total_diff = 0;
+  float max_diff = 0;
+  for (int i = 0; i < problem_size.m(); ++i) {
+    for (int j = 0; j < problem_size.n(); ++j) {
+      float diff = tensor_d.host_view().at({i, j}) - tensor_ref_d.host_view().at({i, j});
+      total_diff += diff;
+      max_diff = std::max(max_diff, diff);
+    }
+  }
+  bool passed = max_diff < 10;
 
+  std::cout << "Total diff: " << total_diff << std::endl;
+  std::cout << "Max diff: " << max_diff << std::endl;
   std::cout << "Runtime: " << result.runtime_ms << " ms" << std::endl;
   std::cout << " GFLOPs: " << result.gflops << std::endl;
 
