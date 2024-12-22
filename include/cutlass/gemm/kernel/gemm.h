@@ -739,7 +739,7 @@ namespace cutlass
 
               auto offset_N = threadblock_tile_offset.n();
               auto offset_K = params.grid_tiled_shape.n() * (cur_k_block * kWarpGemmIterations + warp_mma_k);
-              uint8_t local_sparsity_B = params.sparsity_B[offset_K * offset_N];
+              uint8_t local_sparsity_B = params.sparsity_B[offset_K + offset_N];
               auto workerid = threadIdx.x / 32;
               auto warp_subtile_y = (workerid % 4);
               auto warp_subtile_x = (workerid / 4); // either 0 or 1
@@ -749,10 +749,8 @@ namespace cutlass
               for (int n = 0; n < MmaIterations::kColumn; n++)
               {
                 auto n_in_terms_of_eight = warp_subtile_x * 4 + (n / 2);
-                if (n_in_terms_of_eight % 2 == 1)
+                if (!(local_sparsity_B & (1 << (MmaIterations::kColumn - 1 - n_in_terms_of_eight))))
                   continue;
-                // if (!(local_sparsity_B & (1 << n)))
-                //   continue;
                 // B size = 16 x 16 at this point [WRONG]
                 CUTLASS_PRAGMA_UNROLL
                 for (int m = 0; m < MmaIterations::kRow; ++m)
