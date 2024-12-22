@@ -769,7 +769,7 @@ namespace cutlass
               CUTLASS_PRAGMA_UNROLL
               for (int n = 0; n < MmaIterations::kColumn; ++n)
               {
-                if (!(local_sparsity_B & (1 << n)))
+                if (!(local_sparsity_B & (1 << (8 - n - 1))))
                   continue;
                 // B size = 16 x 16 at this point
                 CUTLASS_PRAGMA_UNROLL
