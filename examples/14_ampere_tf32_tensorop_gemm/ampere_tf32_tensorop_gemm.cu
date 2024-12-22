@@ -415,10 +415,8 @@ int run(Options &options) {
     tensor_d.host_view(),
     tensor_ref_d.host_view());
 
-  if (passed) {
-    std::cout << "Runtime: " << result.runtime_ms << " ms" << std::endl;
-    std::cout << " GFLOPs: " << result.gflops << std::endl;
-  }
+  std::cout << "Runtime: " << result.runtime_ms << " ms" << std::endl;
+  std::cout << " GFLOPs: " << result.gflops << std::endl;
 
   std::cout << (passed ? "Passed" : "Failed") << std::endl;
 
@@ -465,7 +463,7 @@ int main(int argc, const char **argv) {
     return 0;
   }
 
-  printf("%d x %d x %d TF32 tensor op Matrix Multiply\n", \
+  printf("%d x %d x %d Blocksparse Matrix Multiply\n", \
     options.problem_size.m(), options.problem_size.n(), options.problem_size.k());
 
   if (!options.valid()) {

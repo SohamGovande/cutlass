@@ -416,6 +416,15 @@ namespace cutlass
             }
           };
 
+          auto load_sparsity_into_smem = [&](int cur_k_block, int cur_k_subtile)
+          {
+            auto offset_N = threadblock_tile_offset.n();
+            auto offset_K = params.grid_tiled_shape.n() * (cur_k_block * kWarpGemmIterations + cur_k_subtile);
+            // Shape 3x2
+            uint8_t *smem_sparsity_B = shared_storage.main_loop.sparsity_B.data();
+            smem_sparsity_B[smem_write_stage_idx_ * kWarpGemmIterations + cur_k_subtile] = params.sparsity_B[offset_K + offset_N];
+          };
+
           // Function to advance shared memory write stage
           auto advance_smem_write_stage = [&](IteratorA &iterator_A, IteratorB &iterator_B)
           {
@@ -608,6 +617,8 @@ namespace cutlass
               ++smem_iterator_B_;
             }
 
+            load_sparsity_into_smem(stage, 0);
+            load_sparsity_into_smem(stage, 1);
             // Move to the next write stage
             advance_smem_write_stage(iterator_A, iterator_B);
 
@@ -737,11 +748,23 @@ namespace cutlass
               MmaOperandB const *ptr_B = reinterpret_cast<MmaOperandB const *>(&pipe_state.warp_transformed_frag_B_[warp_mma_k % 2]);
               MmaOperandC *ptr_D = reinterpret_cast<MmaOperandC *>(&accumulators);
 
-              auto offset_N = threadblock_tile_offset.n();
-              auto offset_K = params.grid_tiled_shape.n() * (cur_k_block * kWarpGemmIterations + warp_mma_k);
-              uint8_t local_sparsity_B = params.sparsity_B[offset_K * offset_N];
+              // auto offset_N = threadblock_tile_offset.n();
+              // auto offset_K = params.grid_tiled_shape.n() * (cur_k_block * kWarpGemmIterations + warp_mma_k);
+              // uint8_t local_sparsity_B = params.sparsity_B[offset_K + offset_N];
+              uint8_t local_sparsity_B = shared_storage.main_loop.sparsity_B.data()[smem_read_stage_idx_ * kWarpGemmIterations + warp_mma_k];
+              // if (threadIdx.x == 0 && blockIdx.x == 0 && blockIdx.y == 0 && blockIdx.z == 0)
+              // {
+              //   if (local_sparsity_B != 0xFF)
+              //   {
+              //     printf("[X] local_sparsity_B: 0x%02x, smem_read_stage_idx: %d, warp_mma_k: %d, cur_k_block: %d\n", local_sparsity_B, smem_read_stage_idx_, warp_mma_k, cur_k_block);
+              //   }
+              //   else
+              //   {
+              //     printf("[O] local_sparsity_B: 0x%02x, smem_read_stage_idx: %d, warp_mma_k: %d, cur_k_block: %d\n", local_sparsity_B, smem_read_stage_idx_, warp_mma_k, cur_k_block);
+              //   }
+              // }
 
-              static_assert(sizeof(local_sparsity_B) == MmaIterations::kColumn / 8, "local_sparsity_B size mismatch");
+              // static_assert(sizeof(local_sparsity_B) == MmaIterations::kColumn / 8, "local_sparsity_B size mismatch");
 
               CUTLASS_PRAGMA_UNROLL
               for (int n = 0; n < MmaIterations::kColumn; ++n)
@@ -768,7 +791,7 @@ namespace cutlass
               }
               // Except for the last warp-tile, all warp-tiles issue their share of
               // global->shared fragment copies
-              if (warp_mma_k < kWarpGemmIterations - 1)
+              if (warp_mma_k == 0)
               {
 
                 int group_start_iteration_A, group_start_iteration_B;
@@ -780,24 +803,21 @@ namespace cutlass
                     iterator_B,
                     group_start_iteration_A,
                     group_start_iteration_B);
-              }
-
-              // The second-to-last warp-tile also:
-              //   - performs the last warp-tile's share of global->shared fragment copies
-              //   - moves to the next global fetch stage
-              if (warp_mma_k + 2 == kWarpGemmIterations)
-              {
+                load_sparsity_into_smem(cur_k_block, 0);
+                // The first warp-tile also:
+                //   - performs the last warp-tile's share of global->shared fragment copies
+                //   - moves to the next global fetch stage
 
                 // Performs the last warp-tile's share of global->shared fragment copies
-                int group_start_iteration_A = (warp_mma_k + 1) * Detail::kAccessesPerGroupA;
-                int group_start_iteration_B = (warp_mma_k + 1) * Detail::kAccessesPerGroupB;
+                group_start_iteration_A = (warp_mma_k + 1) * Detail::kAccessesPerGroupA;
+                group_start_iteration_B = (warp_mma_k + 1) * Detail::kAccessesPerGroupB;
 
                 copy_tiles_and_advance(
                     iterator_A,
                     iterator_B,
                     group_start_iteration_A,
                     group_start_iteration_B);
-
+                load_sparsity_into_smem(cur_k_block, 1);
                 // Inserts a memory fence between stages of cp.async instructions.
                 cutlass::arch::cp_async_fence();
 
@@ -814,12 +834,11 @@ namespace cutlass
                 iterator_A.clear_mask(gemm_k_iterations == 0);
                 iterator_B.clear_mask(gemm_k_iterations == 0);
               }
-
-              // The last warp-tile also converts the shared memory fragments used by
-              // the first warp-tile of the next iteration, if necessary (so we can
-              // immediately start issuing MMA instructions at the top of the loop )
-              if (warp_mma_k + 1 == kWarpGemmIterations)
+              else
               {
+                // The last warp-tile also converts the shared memory fragments used by
+                // the first warp-tile of the next iteration, if necessary (so we can
+                // immediately start issuing MMA instructions at the top of the loop )
 
                 warp_mma_.transform(
                     pipe_state.warp_transformed_frag_A_[(warp_mma_k + 1) % 2],
