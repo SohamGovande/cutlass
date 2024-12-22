@@ -37,10 +37,26 @@
 
 #include "cutlass/cutlass.h"
 
+#include "cutlass/transform/threadblock/predicated_tile_access_iterator.h"
+#include "cutlass/transform/threadblock/regular_tile_access_iterator.h"
+#include "cutlass/transform/threadblock/regular_tile_access_iterator_pitch_linear.h"
+#include "cutlass/transform/threadblock/regular_tile_access_iterator_tensor_op_sm80.h"
+#include "cutlass/transform/threadblock/regular_tile_access_iterator_tensor_op.h"
+
+#include "cutlass/gemm/warp/mma_tensor_op.h"
+#include "cutlass/gemm/warp/mma_tensor_op_policy.h"
+#include "cutlass/gemm/warp/mma_tensor_op_tile_iterator_sm80.h"
+#include "cutlass/arch/mma.h"
 #include "cutlass/gemm/gemm.h"
 #include "cutlass/matrix_coord.h"
 #include "cutlass/semaphore.h"
 #include "cutlass/arch/arch.h"
+#include "cutlass/transform/threadblock/predicated_tile_access_iterator_params.h"
+#include "cutlass/gemm/threadblock/mma_multistage.h"
+#include "cutlass/gemm/threadblock/mma_base.h"
+#include "cutlass/layout/tensor_op_multiplicand_sm80.h"
+#include "cutlass/transform/pitch_linear_thread_map.h"
+#include "cutlass/matrix_shape.h"
 #include <type_traits>
 
 // Helper template to force a compile-time error
@@ -285,10 +301,69 @@ namespace cutlass
           // Main loop
           //
 
-          // Construct thread-scoped matrix multiply
-          Mma mma(shared_storage.main_loop, thread_idx, warp_idx, lane_idx);
+          using ElementInputA = cutlass::bfloat16_t;
+          using LayoutInputA = cutlass::layout::RowMajor;
+          using ElementInputB = cutlass::bfloat16_t;
+          using LayoutInputB = cutlass::layout::RowMajor;
+          using ElementAccumulator = float;
+          using LayoutOutput = cutlass::layout::RowMajor;
 
-          typename Mma::FragmentC accumulators;
+          using ShapeMMAThreadBlock = cutlass::gemm::GemmShape<256, 128, 32>;
+          using ShapeMMAWarp = cutlass::gemm::GemmShape<64, 64, 32>;
+
+          using IteratorA = cutlass::transform::threadblock::PredicatedTileAccessIterator<cutlass::MatrixShape<256, 32>, ElementInputA, LayoutInputA, 1, cutlass::transform::PitchLinearWarpRakedThreadMap<cutlass::PitchLinearShape<32, 256>, 256, cutlass::PitchLinearShape<4, 8>, 8>, cutlass::Array<cutlass::bfloat16_t, 8, false>, false, cutlass::layout::NoPermute>;
+          using SmemIteratorA = cutlass::transform::threadblock::RegularTileAccessIterator<
+              cutlass::MatrixShape<256, 32>,                                  // Shape
+              ElementInputA,                                                  // Element
+              cutlass::layout::RowMajorTensorOpMultiplicandCrosswise<16, 32>, // Layout
+              0,                                                              // Advance rank
+              cutlass::transform::PitchLinearWarpRakedThreadMap<
+                  cutlass::PitchLinearShape<32, 256>, // Shape
+                  256,                                // Interleaved
+                  cutlass::PitchLinearShape<4, 8>,    // Lane
+                  8>,                                 // Vector length
+              16                                      // Vector length
+              >;
+          constexpr auto CacheOpA = cutlass::arch::CacheOperation::Global;
+          using IteratorB = cutlass::transform::threadblock::PredicatedTileAccessIterator<cutlass::MatrixShape<32, 128>, ElementInputB, LayoutInputB, 0, cutlass::transform::PitchLinearWarpRakedThreadMap<cutlass::PitchLinearShape<128, 32>, 256, cutlass::PitchLinearShape<8, 4>, 8>, cutlass::Array<cutlass::bfloat16_t, 8, false>, false, cutlass::layout::NoPermute>;
+          using SmemIteratorB = cutlass::transform::threadblock::RegularTileAccessIterator<cutlass::MatrixShape<32, 128>, ElementInputB, cutlass::layout::RowMajorTensorOpMultiplicandCongruous<16, 64>, 0, cutlass::transform::PitchLinearWarpRakedThreadMap<cutlass::PitchLinearShape<128, 32>, 256, cutlass::PitchLinearShape<8, 4>, 8>, 16>;
+          constexpr auto CacheOpB = cutlass::arch::CacheOperation::Global;
+
+          constexpr cutlass::gemm::SharedMemoryClearOption SharedMemoryClear = cutlass::gemm::SharedMemoryClearOption::kNone;
+          using WarpTensorOp = cutlass::gemm::warp::MmaTensorOp<
+              ShapeMMAWarp,
+              ElementInputA,
+              cutlass::layout::RowMajorTensorOpMultiplicandCrosswise<16, 32>,
+              ElementInputB,
+              cutlass::layout::RowMajorTensorOpMultiplicandCongruous<16, 64>,
+              ElementAccumulator,
+              LayoutOutput,
+              cutlass::gemm::warp::MmaTensorOpPolicy<
+                  cutlass::arch::Mma<
+                      cutlass::gemm::GemmShape<16, 8, 16>,
+                      32,
+                      cutlass::bfloat16_t,
+                      cutlass::layout::RowMajor,
+                      cutlass::bfloat16_t,
+                      cutlass::layout::ColumnMajor,
+                      float,
+                      cutlass::layout::RowMajor,
+                      cutlass::arch::OpMultiplyAdd>,
+                  cutlass::MatrixShape<1, 1>>,
+              1,
+              false>;
+          using Policy = cutlass::gemm::threadblock::MmaPolicy<
+              WarpTensorOp,
+              cutlass::MatrixShape<0, 0>,
+              cutlass::MatrixShape<0, 0>,
+              1>;
+
+          using MmaType = cutlass::gemm::threadblock::MmaMultistage<ShapeMMAThreadBlock, IteratorA, SmemIteratorA, CacheOpA, IteratorB, SmemIteratorB, CacheOpB, ElementAccumulator, LayoutOutput, Policy, 3, SharedMemoryClear>;
+          static_assert(std::is_same<MmaType, Mma>::value, "MmaType is not Mma");
+
+          MmaType mma(shared_storage.main_loop, thread_idx, warp_idx, lane_idx);
+
+          typename MmaType::FragmentC accumulators;
 
           accumulators.clear();
 
@@ -320,17 +395,6 @@ namespace cutlass
 
           // Construct the semaphore.
           Semaphore semaphore(params.semaphore + block_idx, thread_idx);
-
-          // If performing a reduction via split-K, fetch the initial synchronization
-          if (kSplitKSerial && params.grid_tiled_shape.k() > 1)
-          {
-
-            // Fetch the synchronization lock initially but do not block.
-            semaphore.fetch();
-
-            // Indicate which position in a serial reduction the output operator is currently updating
-            output_op.set_k_partition(threadblock_tile_offset.k(), params.grid_tiled_shape.k());
-          }
 
           // Tile iterator loading from source tensor.
           typename Epilogue::OutputTileIterator iterator_C(
