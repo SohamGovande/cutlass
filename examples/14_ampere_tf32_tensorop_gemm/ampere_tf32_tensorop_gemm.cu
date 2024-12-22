@@ -163,6 +163,18 @@ struct Options {
   }
 };
 
+template <typename Element, typename Layout, int R = 12, int C = 12, int R_start = 0, int C_start = 0>
+void print_tensorref(cutlass::TensorRef<Element, Layout> tensor_ref) {
+  std::cout << std::fixed << std::setprecision(1);
+  for (int row = R_start; row < R; ++row) {
+    for (int col = C_start; col < C; ++col) {
+      std::cout << std::setw(5) << static_cast<float>(tensor_ref.at({row, col})) << " ";
+    }
+    std::cout << std::endl;
+  }
+}
+
+
 ///////////////////////////////////////////////////////////////////////////////////////////////////
 
 // The code section below describes datatype for input, output matrices and computation between
@@ -271,29 +283,14 @@ int run(Options &options) {
   read_printout("B_orig", tensor_b.host_view().data(), problem_size.k(), problem_size.n());
   read_printout("sparsity_B_packed", tensor_sparsity_b.host_view().data(), problem_size.k() / 8, problem_size.n());
   
-  std::cout << "First 5x5 elements of matrix A:" << std::endl;
-  for (int i = 0; i < 5; ++i) {
-    for (int j = 0; j < 5; ++j) {
-      std::cout << tensor_a.host_view().at({i, j}) << " ";
-    }
-    std::cout << std::endl;
-  }
+  std::cout << "First elements of matrix A:" << std::endl;
+  print_tensorref(tensor_a.host_view());
+  std::cout << "First elements of matrix B:" << std::endl;
+  print_tensorref(tensor_b.host_view());
 
-  std::cout << "First 5x5 elements of matrix B:" << std::endl;
-  for (int i = 0; i < 5; ++i) {
-    for (int j = 0; j < 5; ++j) {
-      std::cout << tensor_b.host_view().at({i, j}) << " ";
-    }
-    std::cout << std::endl;
-  }
+  std::cout << "First elements of matrix sparsity_B_packed:" << std::endl;
+  print_tensorref(tensor_sparsity_b.host_view());
 
-  std::cout << "First 5x5 elements of matrix sparsity_B_packed:" << std::endl;
-  for (int i = 0; i < 5; ++i) {
-    for (int j = 0; j < 5; ++j) {
-      std::cout << static_cast<int>(tensor_sparsity_b.host_view().at({i, j})) << " ";
-    }
-    std::cout << std::endl;
-  }
   // Copy data from host to GPU
   tensor_a.sync_device();
   tensor_b.sync_device();
@@ -416,20 +413,11 @@ int run(Options &options) {
   read_printout("C_ref", tensor_ref_d.host_view().data(), problem_size.m(), problem_size.n());
   tensor_ref_d.sync_device();
   std::cout << "First few values of tensor_d:" << std::endl;
-  for (int i = 0; i < std::min(10, problem_size.m()); ++i) {
-    for (int j = 0; j < std::min(10, problem_size.n()); ++j) {
-      std::cout << tensor_d.host_view().at({i, j}) << " ";
-    }
-    std::cout << std::endl;
-  }
+  print_tensorref<ElementOutput, LayoutOutput, 100, 94, 0, 60>(tensor_d.host_view());
 
   std::cout << "First few values of tensor_ref_d:" << std::endl;
-  for (int i = 0; i < std::min(10, problem_size.m()); ++i) {
-    for (int j = 0; j < std::min(10, problem_size.n()); ++j) {
-      std::cout << tensor_ref_d.host_view().at({i, j}) << " ";
-    }
-    std::cout << std::endl;
-  }
+  print_tensorref<ElementOutput, LayoutOutput, 100, 94, 0, 60>(tensor_ref_d.host_view());
+
   // Check if output from CUTLASS kernel and reference kernel are equal or not
   float total_diff = 0;
   float max_diff = 0;
