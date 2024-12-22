@@ -101,7 +101,7 @@ struct Options {
   
   Options():
     help(false),
-    problem_size({5120, 4096, 4096}),
+    problem_size({4608, 3072, 12288}),
     batch_count(1),
     reference_check(true),
     iterations(20),
@@ -169,14 +169,14 @@ struct Options {
 // elements in input matrices.
 using ElementAccumulator = float;                   // <- data type of accumulator
 using ElementComputeEpilogue = ElementAccumulator;  // <- data type of epilogue operations
-using ElementInputA = float;                        // <- data type of elements in input matrix A
-using ElementInputB = float;                        // <- data type of elements in input matrix B
-using ElementOutput = float;                        // <- data type of elements in output matrix D
+using ElementInputA = cutlass::bfloat16_t;                        // <- data type of elements in input matrix A
+using ElementInputB = cutlass::bfloat16_t;                        // <- data type of elements in input matrix B
+using ElementOutput = cutlass::bfloat16_t;                        // <- data type of elements in output matrix D
 
 // The code section below describes matrix layout of input and output matrices. Column Major for
 // Matrix A, Row Major for Matrix B and Row Major for Matrix C
 using LayoutInputA = cutlass::layout::RowMajor;
-using LayoutInputB = cutlass::layout::ColumnMajor;
+using LayoutInputB = cutlass::layout::RowMajor;
 using LayoutOutput = cutlass::layout::RowMajor;
 
 // This code section describes whether you want to use tensor cores or regular SIMT cores on GPU SM
@@ -187,11 +187,11 @@ using SmArch = cutlass::arch::Sm80;
 
 // This code section describes the tile size a thread block will compute
 using ShapeMMAThreadBlock =
-    cutlass::gemm::GemmShape<128, 128, 16>;  // <- threadblock tile M = 128, N = 128, K = 16
+    cutlass::gemm::GemmShape<256, 128, 32>;  // <- threadblock tile M = 128, N = 128, K = 16
 // This code section describes tile size a warp will compute
-using ShapeMMAWarp = cutlass::gemm::GemmShape<64, 64, 16>;  // <- warp tile M = 64, N = 64, K = 16
+using ShapeMMAWarp = cutlass::gemm::GemmShape<64, 64, 32>;  // <- warp tile M = 64, N = 64, K = 16
 // This code section describes the size of MMA op
-using ShapeMMAOp = cutlass::gemm::GemmShape<16, 8, 8>;  // <- MMA Op tile M = 16, N = 8, K = 8
+using ShapeMMAOp = cutlass::gemm::GemmShape<16, 8, 16>;  // <- MMA Op tile M = 16, N = 8, K = 8
 
 // This code section describes how threadblocks are scheduled on GPU
 using SwizzleThreadBlock = cutlass::gemm::threadblock::GemmIdentityThreadblockSwizzle<>;
@@ -207,7 +207,7 @@ using EpilogueOp = cutlass::epilogue::thread::LinearCombination<
     ElementComputeEpilogue>;  // <- data type for alpha/beta in linear combination function
 
 // Number of pipelines you want to use
-constexpr int NumStages = 4;
+constexpr int NumStages = 3;
 
 using Gemm = cutlass::gemm::device::Gemm<ElementInputA,
                                          LayoutInputA,
