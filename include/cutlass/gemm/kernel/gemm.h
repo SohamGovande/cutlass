@@ -698,7 +698,7 @@ namespace cutlass
 
           // Mainloop
           CUTLASS_GEMM_LOOP
-          for (; gemm_k_iterations > (-Stages + 1);)
+          for (int cur_k_block = 0; gemm_k_iterations > (-Stages + 1); cur_k_block++)
           {
             // Unroll the warp-level MMA tiles of a threadblock's mainloop iteration
             CUTLASS_PRAGMA_UNROLL
@@ -737,9 +737,17 @@ namespace cutlass
               MmaOperandB const *ptr_B = reinterpret_cast<MmaOperandB const *>(&pipe_state.warp_transformed_frag_B_[warp_mma_k % 2]);
               MmaOperandC *ptr_D = reinterpret_cast<MmaOperandC *>(&accumulators);
 
+              auto offset_N = threadblock_tile_offset.n();
+              auto offset_K = params.grid_tiled_shape.n() * (cur_k_block * kWarpGemmIterations + warp_mma_k);
+              uint8_t local_sparsity_B = params.sparsity_B[offset_K * offset_N];
+
+              static_assert(sizeof(local_sparsity_B) == MmaIterations::kColumn / 8, "local_sparsity_B size mismatch");
+
               CUTLASS_PRAGMA_UNROLL
               for (int n = 0; n < MmaIterations::kColumn; ++n)
               {
+                if (!(local_sparsity_B & (1 << n)))
+                  continue;
                 // B size = 16 x 16 at this point
                 CUTLASS_PRAGMA_UNROLL
                 for (int m = 0; m < MmaIterations::kRow; ++m)
