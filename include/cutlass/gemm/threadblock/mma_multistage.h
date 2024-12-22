@@ -164,6 +164,8 @@ namespace cutlass
           /// Buffer for B operand
           AlignedBuffer<typename Operator::ElementB, ShapeB::kCount> operand_B;
 
+          AlignedBuffer<uint8_t, 3 * 2> sparsity_B;
+
         public:
           //
           // Methods
@@ -181,6 +183,12 @@ namespace cutlass
           static typename Operator::LayoutB LayoutB()
           {
             return Operator::LayoutB::packed({ShapeB::kRow, ShapeB::kColumn});
+          }
+
+          CUTLASS_HOST_DEVICE
+          TensorRef<uint8_t, cutlass::layout::RowMajor> sparsity_B_ref()
+          {
+            return TensorRef<uint8_t, cutlass::layout::RowMajor>{sparsity_B.data(), cutlass::layout::RowMajor::packed({3, 2})};
           }
 
           /// Returns a TensorRef to the A operand

@@ -243,7 +243,8 @@ int run(Options &options) {
   cutlass::HostTensor<ElementOutput, LayoutOutput> tensor_ref_d(
       problem_size.mn());  // <- Create matrix D with dimensions M x N used to store output from
                            // reference kernel
-
+  cutlass::HostTensor<uint8_t, cutlass::layout::RowMajor> tensor_sparsity_b(
+      {problem_size.k() / 8, problem_size.n()});  // <- (K/8, N) Coord<2> shape
   // Fill input and output matrices on host using CUTLASS helper functions
   cutlass::reference::host::TensorFillRandomUniform(
       tensor_a.host_view(),
@@ -267,6 +268,8 @@ int run(Options &options) {
       tensor_d.host_view());  // <- fill matrix D on host with zeros
   cutlass::reference::host::TensorFill(
       tensor_ref_d.host_view());  // <- fill matrix D for reference on host with zeros
+  cutlass::reference::host::TensorFill(
+      tensor_sparsity_b.host_view(), uint8_t(1));  // <- fill matrix sparsity_b on host with ones
 
   // Copy data from host to GPU
   tensor_a.sync_device();
@@ -274,6 +277,7 @@ int run(Options &options) {
   tensor_c.sync_device();
   tensor_d.sync_device();
   tensor_ref_d.sync_device();
+  tensor_sparsity_b.sync_device();
 
   // Initialize alpha and beta for dot product computation
   ElementComputeEpilogue alpha = ElementComputeEpilogue(options.alpha);
@@ -289,6 +293,7 @@ int run(Options &options) {
                                      tensor_b.device_ref(),  // <- reference to matrix B on device
                                      tensor_c.device_ref(),  // <- reference to matrix C on device
                                      tensor_d.device_ref(),  // <- reference to matrix D on device
+                                     tensor_sparsity_b.device_ref(),  // <- reference to matrix sparsity_b on device
                                      {alpha, beta},          // <- tuple of alpha and beta
                                      split_k_slices};        // <- k-dimension split factor
 
