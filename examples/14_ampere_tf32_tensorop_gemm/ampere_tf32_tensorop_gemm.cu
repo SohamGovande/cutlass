@@ -289,7 +289,7 @@ int run(Options &options) {
   print_tensorref(tensor_b.host_view());
 
   std::cout << "First elements of matrix sparsity_B_packed:" << std::endl;
-  print_tensorref(tensor_sparsity_b.host_view());
+  print_tensorref<uint8_t, cutlass::layout::RowMajor, 10, 8>(tensor_sparsity_b.host_view());
 
   // Copy data from host to GPU
   tensor_a.sync_device();

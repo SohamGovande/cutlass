@@ -746,28 +746,24 @@ namespace cutlass
               static_assert(sizeof(local_sparsity_B) == MmaIterations::kColumn / 8, "local_sparsity_B size mismatch");
 
               CUTLASS_PRAGMA_UNROLL
-              for (int n = 0; n < MmaIterations::kColumn; n++)
+              for (int two_n = 0; two_n < MmaIterations::kColumn; two_n += 2)
               {
-                auto n_in_terms_of_eight = warp_subtile_x * 4 + (n / 2);
+                auto n_in_terms_of_eight = warp_subtile_x * 4 + (two_n / 2);
                 if (!(local_sparsity_B & (1 << (MmaIterations::kColumn - 1 - n_in_terms_of_eight))))
                   continue;
-                // B size = 16 x 16 at this point [WRONG]
                 CUTLASS_PRAGMA_UNROLL
-                for (int m = 0; m < MmaIterations::kRow; ++m)
+                for (int n = two_n; n < two_n + 2; n++)
                 {
-                  // MmaIterations::kRow = 4, MmaIterations::kColumn = 8
-                  // A = (256/4) x 16 = 64 x 16 [WRONG]
-                  // B = 16 x (128/8) = 16 x 16 [WRONG]
-                  // WarpMatMul: 64 x 16 x 16 [WRONG]
-                  // ArchMmaOp:  16 x  8 x 16 [WRONG]
-                  // # warps:      4 x 2    = 8 [WRONG]
-                  // int n_serpentine = ((m % 2) ? (MmaIterations::kColumn - 1 - n) : n);
-                  int m_serpentine = (n & 1) ? (MmaIterations::kRow - 1 - m) : m;
+                  CUTLASS_PRAGMA_UNROLL
+                  for (int m = 0; m < MmaIterations::kRow; ++m)
+                  {
+                    int m_serpentine = (n & 1) ? (MmaIterations::kRow - 1 - m) : m;
 
-                  arch_mma_op(ptr_D[m_serpentine + n * MmaIterations::kRow],
-                              ptr_A[m_serpentine],
-                              ptr_B[n],
-                              ptr_D[m_serpentine + n * MmaIterations::kRow]);
+                    arch_mma_op(ptr_D[m_serpentine + n * MmaIterations::kRow],
+                                ptr_A[m_serpentine],
+                                ptr_B[n],
+                                ptr_D[m_serpentine + n * MmaIterations::kRow]);
+                  }
                 }
               }
               // Except for the last warp-tile, all warp-tiles issue their share of
