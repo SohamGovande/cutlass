@@ -79,26 +79,6 @@ static void printType()
 }
 /////////////////////////////////////////////////////////////////////////////////////////////////
 
-template <typename ArchMMAOp, typename MmaIterations, typename A, typename B, typename D>
-inline constexpr void mma_m64n16_serpentine(int two_n, A ptr_A, B ptr_B, D ptr_D)
-{
-  ArchMMAOp arch_mma_op;
-  CUTLASS_PRAGMA_UNROLL
-  for (int n = two_n; n < two_n + 2; n++)
-  {
-    CUTLASS_PRAGMA_UNROLL
-    for (int m = 0; m < MmaIterations::kRow; ++m)
-    {
-      int m_serpentine = (n & 1) ? (MmaIterations::kRow - 1 - m) : m;
-
-      arch_mma_op(ptr_D[m_serpentine + n * MmaIterations::kRow],
-                  ptr_A[m_serpentine],
-                  ptr_B[n],
-                  ptr_D[m_serpentine + n * MmaIterations::kRow]);
-    }
-  }
-}
-
 namespace cutlass
 {
   namespace gemm
@@ -442,19 +422,17 @@ namespace cutlass
           {
             if (gemm_k_iterations <= 0)
               return;
-            // Only have one lane issue the gmem -> smem load
-            if (threadIdx.x % 32 != 0)
-              return;
-
+            constexpr auto kSparsityBSize = 4;
             auto offset_N = threadblock_tile_offset.n();
             auto offset_K = params.grid_tiled_shape.n() * (cur_k_block * kWarpGemmIterations + cur_k_subtile);
             // Shape 3x2
             auto stage_offset = smem_write_stage_idx_ * kWarpGemmIterations;
-            auto smem_sparsity_B_index = (stage_offset + cur_k_subtile) * 4;
-            uint8_t *smem_sparsity_B = shared_storage.main_loop.sparsity_B.data() + smem_sparsity_B_index;
-            uint8_t const *global_sparsity_B = &params.sparsity_B[(offset_K + offset_N) * 4];
-            // *smem_sparsity_B = *global_sparsity_B;
+            auto smem_sparsity_B_index = (stage_offset + cur_k_subtile) * kSparsityBSize;
+            auto smem_sparsity_B = shared_storage.main_loop.sparsity_B.data() + smem_sparsity_B_index;
+            auto global_sparsity_B = &params.sparsity_B[(offset_K + offset_N) * kSparsityBSize];
             cutlass::arch::cp_async<4, cutlass::arch::CacheOperation::Always>(smem_sparsity_B, global_sparsity_B);
+
+            // *smem_sparsity_B = *global_sparsity_B;
             // if (blockIdx.x == 0 && blockIdx.y == 0 && blockIdx.z == 0 && threadIdx.x == 0)
             // {
             //   printf("Index %d: [%d, %d] = %d (smem_write_stage_idx_ = %d)\n", smem_sparsity_B_index, cur_k_block, cur_k_subtile, value, smem_write_stage_idx_);
@@ -775,6 +753,7 @@ namespace cutlass
               using ArchMmaOperator = typename WarpTensorOp::ArchMmaOperator;
               using MmaIterations = typename WarpTensorOp::MmaIterations;
 
+              ArchMmaOperator arch_mma_op;
               using MmaOperandA = typename ArchMmaOperator::FragmentA;
               using MmaOperandB = typename ArchMmaOperator::FragmentB;
               using MmaOperandC = typename ArchMmaOperator::FragmentC;
@@ -786,9 +765,7 @@ namespace cutlass
               auto cur_k_block = load_k_block_sparsity - (Stages - 1);
               uint8_t local_sparsity_B = shared_storage.main_loop.sparsity_B.data()[((cur_k_block % Stages) * kWarpGemmIterations + warp_mma_k) * 4];
               auto laneid = threadIdx.x % 32;
-              auto warp_subtile_y = (workerid % 4);
-              auto warp_subtile_x = (workerid / 4); // either 0 or 1
-              static_assert(sizeof(local_sparsity_B) == MmaIterations::kColumn / 8, "local_sparsity_B size mismatch");
+              auto warp_subtile_x = (workerid / WarpCount_kM);
               // auto offset_N = threadblock_tile_offset.n();
               // auto offset_K = params.grid_tiled_shape.n() * (cur_k_block * kWarpGemmIterations + warp_mma_k);
               // uint8_t local_sparsity_B_global = params.sparsity_B[offset_K + offset_N];
@@ -798,12 +775,25 @@ namespace cutlass
               // }
 
               CUTLASS_PRAGMA_UNROLL
-              for (int bit = 0; bit < MmaIterations::kColumn / 2; bit++)
+              for (int two_n = 0; two_n < MmaIterations::kColumn; two_n += 2)
               {
-                auto n_in_terms_of_eight = warp_subtile_x * 4 + bit;
-                if (!(local_sparsity_B & (1 << (MmaIterations::kColumn - 1 - n_in_terms_of_eight))))
+                auto bit_to_access = warp_subtile_x * WarpCount_kM + (two_n / 2);
+                if (!(local_sparsity_B & (1 << (7 - bit_to_access))))
                   continue;
-                mma_m64n16_serpentine<ArchMmaOperator, MmaIterations>(bit * 2, ptr_A, ptr_B, ptr_D);
+                CUTLASS_PRAGMA_UNROLL
+                for (int n = two_n; n < two_n + 2; n++)
+                {
+                  CUTLASS_PRAGMA_UNROLL
+                  for (int m = 0; m < MmaIterations::kRow; ++m)
+                  {
+                    int m_serpentine = (n & 1) ? (MmaIterations::kRow - 1 - m) : m;
+
+                    arch_mma_op(ptr_D[m_serpentine + n * MmaIterations::kRow],
+                                ptr_A[m_serpentine],
+                                ptr_B[n],
+                                ptr_D[m_serpentine + n * MmaIterations::kRow]);
+                  }
+                }
               }
 
               // Except for the last warp-tile, all warp-tiles issue their share of
