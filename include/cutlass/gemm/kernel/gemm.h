@@ -77,36 +77,6 @@ static void printType()
   // Use static_assert to force the compiler to display the type in an error
   static_assert(sizeof(TypeDebugger<T>) == 0, "Printing type...");
 }
-
-template <typename ArchMMAOp, typename MmaIterations, typename ElementA, typename ElementB, typename ElementD>
-constexpr inline void single_m_col(int two_n, ElementA ptr_A, ElementB ptr_B, ElementD ptr_D)
-{
-  ArchMMAOp arch_mma_op;
-  CUTLASS_PRAGMA_UNROLL
-  for (int n = two_n; n < two_n + 2; n++)
-  {
-    CUTLASS_PRAGMA_UNROLL
-    for (int m = 0; m < MmaIterations::kRow; ++m)
-    {
-      int m_serpentine = (n & 1) ? (MmaIterations::kRow - 1 - m) : m;
-
-      arch_mma_op(ptr_D[m_serpentine + n * MmaIterations::kRow],
-                  ptr_A[m_serpentine],
-                  ptr_B[n],
-                  ptr_D[m_serpentine + n * MmaIterations::kRow]);
-    }
-  }
-}
-
-constexpr inline uint8_t get_two_bit_group(uint8_t byte, int group_index)
-{
-  // Calculate the number of bits to shift
-  int shift = 6 - (2 * group_index);
-
-  // Shift right and mask the last two bits
-  return (byte >> shift) & 0x03;
-}
-
 /////////////////////////////////////////////////////////////////////////////////////////////////
 
 namespace cutlass
@@ -330,7 +300,7 @@ namespace cutlass
           using LayoutOutput = cutlass::layout::RowMajor;
 
           using ShapeMMAThreadBlock = cutlass::gemm::GemmShape<256, 128, 32>;
-          using ShapeMMAWarp = cutlass::gemm::GemmShape<128, 32, 32>;
+          using ShapeMMAWarp = cutlass::gemm::GemmShape<64, 64, 32>;
 
           using IteratorA = cutlass::transform::threadblock::PredicatedTileAccessIterator<cutlass::MatrixShape<256, 32>, ElementInputA, LayoutInputA, 1, cutlass::transform::PitchLinearWarpRakedThreadMap<cutlass::PitchLinearShape<32, 256>, 256, cutlass::PitchLinearShape<4, 8>, 8>, cutlass::Array<cutlass::bfloat16_t, 8, false>, false, cutlass::layout::NoPermute>;
           using SmemIteratorA = cutlass::transform::threadblock::RegularTileAccessIterator<cutlass::MatrixShape<256, 32>, ElementInputA, cutlass::layout::RowMajorTensorOpMultiplicandCrosswise<16, 32>, 0, cutlass::transform::PitchLinearWarpRakedThreadMap<cutlass::PitchLinearShape<32, 256>, 256, cutlass::PitchLinearShape<4, 8>, 8>, 16>;
@@ -804,12 +774,27 @@ namespace cutlass
               //   printf("Worker %d: Mismatch at [%d, %d] = %d (global = %d)\n", workerid, cur_k_block, warp_mma_k, local_sparsity_B, local_sparsity_B_global);
               // }
 
-              static_assert(MmaIterations::kColumn == 4, "MmaIterations::kColumn must be 4 for this implementation of bit-grouping");
-              auto bit_group = get_two_bit_group(local_sparsity_B, warp_subtile_x);
-              if (bit_group & 0b10)
-                single_m_col<ArchMmaOperator, MmaIterations>(0, ptr_A, ptr_B, ptr_D);
-              if (bit_group & 0b01)
-                single_m_col<ArchMmaOperator, MmaIterations>(2, ptr_A, ptr_B, ptr_D);
+              CUTLASS_PRAGMA_UNROLL
+              for (int two_n = 0; two_n < MmaIterations::kColumn; two_n += 2)
+              {
+                auto bit_to_access = warp_subtile_x * WarpCount_kM + (two_n / 2);
+                if (!(local_sparsity_B & (1 << (7 - bit_to_access))))
+                  continue;
+                CUTLASS_PRAGMA_UNROLL
+                for (int n = two_n; n < two_n + 2; n++)
+                {
+                  CUTLASS_PRAGMA_UNROLL
+                  for (int m = 0; m < MmaIterations::kRow; ++m)
+                  {
+                    int m_serpentine = (n & 1) ? (MmaIterations::kRow - 1 - m) : m;
+
+                    arch_mma_op(ptr_D[m_serpentine + n * MmaIterations::kRow],
+                                ptr_A[m_serpentine],
+                                ptr_B[n],
+                                ptr_D[m_serpentine + n * MmaIterations::kRow]);
+                  }
+                }
+              }
 
               // Except for the last warp-tile, all warp-tiles issue their share of
               // global->shared fragment copies
