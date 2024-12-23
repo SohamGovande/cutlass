@@ -164,7 +164,8 @@ namespace cutlass
           /// Buffer for B operand
           AlignedBuffer<typename Operator::ElementB, ShapeB::kCount> operand_B;
 
-          AlignedBuffer<uint8_t, 3 * 2 * 4> sparsity_B;
+          /// Sometimes we only use 3*2*4 (4-byte loading), but its just an extra 24 bytes allocated - who cares
+          AlignedBuffer<uint8_t, 3 * 2 * 8> sparsity_B;
 
         public:
           //
