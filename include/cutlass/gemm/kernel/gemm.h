@@ -389,6 +389,7 @@ namespace cutlass
 
           // kWarpGemmIterations
           constexpr auto kWarpGemmIterations = ShapeMMAWarp::kK / WarpTensorOp::Policy::MmaShape::kK; // 32/16=2
+          constexpr auto kSparsityBSize = 4;
 
           // Add per-warp offsets in units of warp-level tiles
           warp_tile_iterator_A_.add_tile_offset(
@@ -422,7 +423,6 @@ namespace cutlass
           {
             if (gemm_k_iterations <= 0)
               return;
-            constexpr auto kSparsityBSize = 4;
             auto offset_N = threadblock_tile_offset.n();
             auto offset_K = params.grid_tiled_shape.n() * (cur_k_block * kWarpGemmIterations + cur_k_subtile);
             // Shape 3x2
@@ -430,7 +430,7 @@ namespace cutlass
             auto smem_sparsity_B_index = (stage_offset + cur_k_subtile) * kSparsityBSize;
             auto smem_sparsity_B = shared_storage.main_loop.sparsity_B.data() + smem_sparsity_B_index;
             auto global_sparsity_B = &params.sparsity_B[(offset_K + offset_N) * kSparsityBSize];
-            cutlass::arch::cp_async<4, cutlass::arch::CacheOperation::Always>(smem_sparsity_B, global_sparsity_B);
+            cutlass::arch::cp_async<kSparsityBSize, cutlass::arch::CacheOperation::Always>(smem_sparsity_B, global_sparsity_B);
 
             // *smem_sparsity_B = *global_sparsity_B;
             // if (blockIdx.x == 0 && blockIdx.y == 0 && blockIdx.z == 0 && threadIdx.x == 0)
@@ -570,11 +570,6 @@ namespace cutlass
           CUTLASS_PRAGMA_UNROLL
           for (int stage = 0; stage < Stages - 1; ++stage, --gemm_k_iterations)
           {
-
-            // Disable global fetching if done with global fetch iterations
-            iterator_A.clear_mask(gemm_k_iterations == 0);
-            iterator_B.clear_mask(gemm_k_iterations == 0);
-
             iterator_A.set_iteration_index(0);
             smem_iterator_A_.set_iteration_index(0);
 
@@ -693,10 +688,6 @@ namespace cutlass
           // Initialize destination accumulators with source accumulators
           PipeState pipe_state;
 
-          // Disable global fetching if done with global fetch iterations
-          iterator_A.clear_mask(gemm_k_iterations == 0);
-          iterator_B.clear_mask(gemm_k_iterations == 0);
-
           // Load first warp-tile's A fragment from shared memory
           warp_tile_iterator_A_.set_kgroup_index(0);
           warp_tile_iterator_A_.load(pipe_state.warp_loaded_frag_A_[0]);
@@ -763,7 +754,7 @@ namespace cutlass
               MmaOperandC *ptr_D = reinterpret_cast<MmaOperandC *>(&accumulators);
 
               auto cur_k_block = load_k_block_sparsity - (Stages - 1);
-              uint8_t local_sparsity_B = shared_storage.main_loop.sparsity_B.data()[((cur_k_block % Stages) * kWarpGemmIterations + warp_mma_k) * 4];
+              uint8_t local_sparsity_B = shared_storage.main_loop.sparsity_B.data()[((cur_k_block % Stages) * kWarpGemmIterations + warp_mma_k) * kSparsityBSize];
               auto laneid = threadIdx.x % 32;
               auto warp_subtile_x = (workerid / WarpCount_kM);
               // auto offset_N = threadblock_tile_offset.n();
