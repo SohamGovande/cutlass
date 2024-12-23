@@ -430,7 +430,7 @@ namespace cutlass
             auto offset_K = params.grid_tiled_shape.n() * (cur_k_block * kWarpGemmIterations + cur_k_subtile);
             // Shape 3x2
             auto stage_offset = smem_write_stage_idx_ * kWarpGemmIterations;
-            auto smem_sparsity_B_index = stage_offset + cur_k_subtile;
+            auto smem_sparsity_B_index = (stage_offset + cur_k_subtile) * 4;
             uint8_t *smem_sparsity_B = shared_storage.main_loop.sparsity_B.data() + smem_sparsity_B_index;
             auto value = params.sparsity_B[offset_K + offset_N];
             *smem_sparsity_B = value;
@@ -764,7 +764,7 @@ namespace cutlass
               MmaOperandC *ptr_D = reinterpret_cast<MmaOperandC *>(&accumulators);
 
               auto cur_k_block = load_k_block_sparsity - (Stages - 1);
-              uint8_t local_sparsity_B = shared_storage.main_loop.sparsity_B.data()[(cur_k_block % Stages) * kWarpGemmIterations + warp_mma_k];
+              uint8_t local_sparsity_B = shared_storage.main_loop.sparsity_B.data()[((cur_k_block % Stages) * kWarpGemmIterations + warp_mma_k) * 4];
               auto laneid = threadIdx.x % 32;
               auto warp_subtile_y = (workerid % 4);
               auto warp_subtile_x = (workerid / 4); // either 0 or 1
