@@ -253,7 +253,7 @@ int run(Options &options) {
       problem_size.mn());  // <- Create matrix D with dimensions M x N used to store output from
                            // CUTLASS kernel
   cutlass::HostTensor<uint8_t, cutlass::layout::RowMajor> tensor_sparsity_b(
-      {problem_size.k() / 8, problem_size.n()});  // <- (K/8, N) Coord<2> shape
+      {problem_size.k(), problem_size.n() / 8 * 4});  // <- (K, N/8) Coord<2> shape
   // Fill input and output matrices on host using CUTLASS helper functions
   cutlass::reference::host::TensorFillRandomUniform(
       tensor_a.host_view(),
@@ -281,7 +281,7 @@ int run(Options &options) {
 
   read_printout("A", tensor_a.host_view().data(), problem_size.m(), problem_size.k());
   read_printout("B_orig", tensor_b.host_view().data(), problem_size.k(), problem_size.n());
-  read_printout("sparsity_B_packed", tensor_sparsity_b.host_view().data(), problem_size.k() / 8, problem_size.n());
+  read_printout("sparsity_B_packed", tensor_sparsity_b.host_view().data(), problem_size.k(), problem_size.n() / 8);
   
   std::cout << "First elements of matrix A:" << std::endl;
   print_tensorref(tensor_a.host_view());

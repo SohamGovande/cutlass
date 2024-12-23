@@ -432,8 +432,9 @@ namespace cutlass
             auto stage_offset = smem_write_stage_idx_ * kWarpGemmIterations;
             auto smem_sparsity_B_index = (stage_offset + cur_k_subtile) * 4;
             uint8_t *smem_sparsity_B = shared_storage.main_loop.sparsity_B.data() + smem_sparsity_B_index;
-            auto value = params.sparsity_B[offset_K + offset_N];
-            *smem_sparsity_B = value;
+            uint8_t const *global_sparsity_B = &params.sparsity_B[(offset_K + offset_N) * 4];
+            // *smem_sparsity_B = *global_sparsity_B;
+            cutlass::arch::cp_async<4, cutlass::arch::CacheOperation::Always>(smem_sparsity_B, global_sparsity_B);
             // if (blockIdx.x == 0 && blockIdx.y == 0 && blockIdx.z == 0 && threadIdx.x == 0)
             // {
             //   printf("Index %d: [%d, %d] = %d (smem_write_stage_idx_ = %d)\n", smem_sparsity_B_index, cur_k_block, cur_k_subtile, value, smem_write_stage_idx_);

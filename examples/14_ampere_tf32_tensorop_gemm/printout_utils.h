@@ -30,6 +30,33 @@ void read_printout(const std::string &filename, T *tensor, int M, int N)
         }
     }
 }
+template <>
+void read_printout(const std::string &filename, uint8_t *tensor, int M, int N)
+{
+    std::cout << "Reading printout " << filename << std::endl;
+    std::ifstream file(get_printout_path(filename));
+    if (!file.is_open())
+    {
+        throw std::runtime_error("Error: File " + get_printout_path(filename) + " does not exist.");
+    }
+    int write_loc = 0;
+    for (int i = 0; i < M; ++i)
+    {
+        if (i % PRINT_EVERY == 0 and i > 0)
+        {
+            std::cout << "... " << i << " / " << M << std::endl;
+        }
+        for (int j = 0; j < N; ++j)
+        {
+            float in;
+            file >> in;
+            tensor[write_loc++] = uint8_t(in);
+            tensor[write_loc++] = 0xFF;
+            tensor[write_loc++] = 0xFF;
+            tensor[write_loc++] = 0xFF;
+        }
+    }
+}
 
 template <>
 void read_printout<bool>(const std::string &filename, bool *tensor, int M, int N)
