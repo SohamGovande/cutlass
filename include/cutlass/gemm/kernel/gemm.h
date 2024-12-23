@@ -419,19 +419,16 @@ namespace cutlass
             }
           };
 
-          auto global_sparsity_B_iterator = params.sparsity_B + threadblock_tile_offset.n() * kSparsityBSize;
-
+          auto global_sparsity_B_iterator = params.sparsity_B + threadblock_tile_offset.n() * kSparsityBSize +
+                                            params.grid_tiled_shape.n() * kSparsityBSize * workerid;
+          auto smem_sparsity_B_iterator_write = shared_storage.main_loop.sparsity_B.data() + workerid * kSparsityBSize;
           auto load_sparsity_into_smem = [&](int cur_k_block, int cur_k_subtile)
           {
             if (gemm_k_iterations <= 0)
               return;
-            auto offset_K = params.grid_tiled_shape.n() * (cur_k_block * kWarpGemmIterations + cur_k_subtile);
-            // Shape 3x2
-            auto stage_offset = smem_write_stage_idx_ * kWarpGemmIterations;
-            auto smem_sparsity_B_index = (stage_offset + cur_k_subtile) * kSparsityBSize;
-            auto smem_sparsity_B = shared_storage.main_loop.sparsity_B.data() + smem_sparsity_B_index;
-            auto global_sparsity_B = &global_sparsity_B_iterator[offset_K * kSparsityBSize];
-            cutlass::arch::cp_async<kSparsityBSize, cutlass::arch::CacheOperation::Always>(smem_sparsity_B, global_sparsity_B);
+            auto smem_sparsity_B = smem_sparsity_B_iterator_write + smem_write_stage_idx_ * kWarpGemmIterations * kSparsityBSize;
+            cutlass::arch::cp_async<kSparsityBSize, cutlass::arch::CacheOperation::Always>(smem_sparsity_B, global_sparsity_B_iterator);
+            global_sparsity_B_iterator += params.grid_tiled_shape.n() * kSparsityBSize * kWarpGemmIterations;
 
             // *smem_sparsity_B = *global_sparsity_B;
             // if (blockIdx.x == 0 && blockIdx.y == 0 && blockIdx.z == 0 && threadIdx.x == 0)
