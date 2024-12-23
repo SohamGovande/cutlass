@@ -79,6 +79,26 @@ static void printType()
 }
 /////////////////////////////////////////////////////////////////////////////////////////////////
 
+template <typename ArchMMAOp, typename MmaIterations, typename A, typename B, typename D>
+inline constexpr void mma_m64n16_serpentine(int two_n, A ptr_A, B ptr_B, D ptr_D)
+{
+  ArchMMAOp arch_mma_op;
+  CUTLASS_PRAGMA_UNROLL
+  for (int n = two_n; n < two_n + 2; n++)
+  {
+    CUTLASS_PRAGMA_UNROLL
+    for (int m = 0; m < MmaIterations::kRow; ++m)
+    {
+      int m_serpentine = (n & 1) ? (MmaIterations::kRow - 1 - m) : m;
+
+      arch_mma_op(ptr_D[m_serpentine + n * MmaIterations::kRow],
+                  ptr_A[m_serpentine],
+                  ptr_B[n],
+                  ptr_D[m_serpentine + n * MmaIterations::kRow]);
+    }
+  }
+}
+
 namespace cutlass
 {
   namespace gemm
@@ -755,7 +775,6 @@ namespace cutlass
               using ArchMmaOperator = typename WarpTensorOp::ArchMmaOperator;
               using MmaIterations = typename WarpTensorOp::MmaIterations;
 
-              ArchMmaOperator arch_mma_op;
               using MmaOperandA = typename ArchMmaOperator::FragmentA;
               using MmaOperandB = typename ArchMmaOperator::FragmentB;
               using MmaOperandC = typename ArchMmaOperator::FragmentC;
@@ -779,25 +798,12 @@ namespace cutlass
               // }
 
               CUTLASS_PRAGMA_UNROLL
-              for (int two_n = 0; two_n < MmaIterations::kColumn; two_n += 2)
+              for (int bit = 0; bit < MmaIterations::kColumn / 2; bit++)
               {
-                auto n_in_terms_of_eight = warp_subtile_x * 4 + (two_n / 2);
+                auto n_in_terms_of_eight = warp_subtile_x * 4 + bit;
                 if (!(local_sparsity_B & (1 << (MmaIterations::kColumn - 1 - n_in_terms_of_eight))))
                   continue;
-                CUTLASS_PRAGMA_UNROLL
-                for (int n = two_n; n < two_n + 2; n++)
-                {
-                  CUTLASS_PRAGMA_UNROLL
-                  for (int m = 0; m < MmaIterations::kRow; ++m)
-                  {
-                    int m_serpentine = (n & 1) ? (MmaIterations::kRow - 1 - m) : m;
-
-                    arch_mma_op(ptr_D[m_serpentine + n * MmaIterations::kRow],
-                                ptr_A[m_serpentine],
-                                ptr_B[n],
-                                ptr_D[m_serpentine + n * MmaIterations::kRow]);
-                  }
-                }
+                mma_m64n16_serpentine<ArchMmaOperator, MmaIterations>(bit * 2, ptr_A, ptr_B, ptr_D);
               }
 
               // Except for the last warp-tile, all warp-tiles issue their share of
