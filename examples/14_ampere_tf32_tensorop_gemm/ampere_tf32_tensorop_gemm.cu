@@ -441,7 +441,7 @@ int run(Options &options) {
   std::cout << "Total diff: " << total_diff << std::endl;
   std::cout << "Max diff: " << max_diff << std::endl;
   std::cout << "Runtime: " << result.runtime_ms << " ms" << std::endl;
-  std::cout << " GFLOPs: " << result.gflops << std::endl;
+  std::cout << " TFLOPs: " << result.gflops / 1000 << std::endl;
 
   std::cout << (passed ? "Passed" : "Failed") << std::endl;
 
