@@ -416,6 +416,24 @@ namespace cutlass
             }
           };
 
+          auto load_sparsity_into_smem = [&](int cur_k_block, int cur_k_subtile)
+          {
+            if (gemm_k_iterations <= 0)
+              return;
+            auto offset_N = threadblock_tile_offset.n();
+            auto offset_K = params.grid_tiled_shape.n() * (cur_k_block * kWarpGemmIterations + cur_k_subtile);
+            // Shape 3x2
+            uint8_t *smem_sparsity_B = shared_storage.main_loop.sparsity_B.data();
+            auto stage_offset = smem_write_stage_idx_ * kWarpGemmIterations;
+            auto value = params.sparsity_B[offset_K + offset_N];
+            auto smem_sparsity_B_index = stage_offset + cur_k_subtile;
+            smem_sparsity_B[smem_sparsity_B_index] = value;
+            // if (blockIdx.x == 0 && blockIdx.y == 0 && blockIdx.z == 0 && threadIdx.x == 0)
+            // {
+            //   printf("Index %d: [%d, %d] = %d (smem_write_stage_idx_ = %d)\n", smem_sparsity_B_index, cur_k_block, cur_k_subtile, value, smem_write_stage_idx_);
+            // }
+          };
+
           // Function to advance shared memory write stage
           auto advance_smem_write_stage = [&](IteratorA &iterator_A, IteratorB &iterator_B)
           {
@@ -608,6 +626,9 @@ namespace cutlass
               ++smem_iterator_B_;
             }
 
+            load_sparsity_into_smem(stage, 0);
+            load_sparsity_into_smem(stage, 1);
+
             // Move to the next write stage
             advance_smem_write_stage(iterator_A, iterator_B);
 
@@ -698,7 +719,9 @@ namespace cutlass
 
           // Mainloop
           CUTLASS_GEMM_LOOP
-          for (int cur_k_block = 0; gemm_k_iterations > (-Stages + 1); cur_k_block++)
+          for (int load_k_block_sparsity = Stages - 1;
+               gemm_k_iterations > (-Stages + 1);
+               load_k_block_sparsity++)
           {
             // Unroll the warp-level MMA tiles of a threadblock's mainloop iteration
             CUTLASS_PRAGMA_UNROLL
@@ -737,13 +760,20 @@ namespace cutlass
               MmaOperandB const *ptr_B = reinterpret_cast<MmaOperandB const *>(&pipe_state.warp_transformed_frag_B_[warp_mma_k % 2]);
               MmaOperandC *ptr_D = reinterpret_cast<MmaOperandC *>(&accumulators);
 
-              auto offset_N = threadblock_tile_offset.n();
-              auto offset_K = params.grid_tiled_shape.n() * (cur_k_block * kWarpGemmIterations + warp_mma_k);
-              uint8_t local_sparsity_B = params.sparsity_B[offset_K + offset_N];
+              auto cur_k_block = load_k_block_sparsity - (Stages - 1);
+              uint8_t local_sparsity_B = shared_storage.main_loop.sparsity_B.data()[(cur_k_block % Stages) * kWarpGemmIterations + warp_mma_k];
               auto workerid = threadIdx.x / 32;
+              auto laneid = threadIdx.x % 32;
               auto warp_subtile_y = (workerid % 4);
               auto warp_subtile_x = (workerid / 4); // either 0 or 1
               static_assert(sizeof(local_sparsity_B) == MmaIterations::kColumn / 8, "local_sparsity_B size mismatch");
+              // auto offset_N = threadblock_tile_offset.n();
+              // auto offset_K = params.grid_tiled_shape.n() * (cur_k_block * kWarpGemmIterations + warp_mma_k);
+              // uint8_t local_sparsity_B_global = params.sparsity_B[offset_K + offset_N];
+              // if (local_sparsity_B_global != local_sparsity_B && blockIdx.x == 0 && blockIdx.y == 0 && blockIdx.z == 0 && laneid == 0 && workerid == 0)
+              // {
+              //   printf("Worker %d: Mismatch at [%d, %d] = %d (global = %d)\n", workerid, cur_k_block, warp_mma_k, local_sparsity_B, local_sparsity_B_global);
+              // }
 
               CUTLASS_PRAGMA_UNROLL
               for (int two_n = 0; two_n < MmaIterations::kColumn; two_n += 2)
@@ -774,6 +804,7 @@ namespace cutlass
                 int group_start_iteration_A, group_start_iteration_B;
                 group_start_iteration_A = warp_mma_k * Detail::kAccessesPerGroupA;
                 group_start_iteration_B = warp_mma_k * Detail::kAccessesPerGroupB;
+                load_sparsity_into_smem(load_k_block_sparsity, warp_mma_k);
 
                 copy_tiles_and_advance(
                     iterator_A,
@@ -797,6 +828,7 @@ namespace cutlass
                     iterator_B,
                     group_start_iteration_A,
                     group_start_iteration_B);
+                load_sparsity_into_smem(load_k_block_sparsity, warp_mma_k + 1);
 
                 // Inserts a memory fence between stages of cp.async instructions.
                 cutlass::arch::cp_async_fence();

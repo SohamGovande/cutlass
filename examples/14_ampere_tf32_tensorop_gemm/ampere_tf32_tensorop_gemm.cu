@@ -350,6 +350,13 @@ int run(Options &options) {
     }
   }
 
+  constexpr auto warmup_iters = 5;
+  for (int iter = 0; iter < warmup_iters; ++iter) {
+    // Launch initialized CUTLASS kernel
+    status = gemm_op();
+    CUTLASS_CHECK(status);
+  }
+
   // Record an event at the start of a series of GEMMs
   result.error = cudaEventRecord(events[0]);
   if (result.error != cudaSuccess) {
@@ -430,6 +437,7 @@ int run(Options &options) {
   }
   bool passed = max_diff < 10;
 
+  std::cout << std::setprecision(3);
   std::cout << "Total diff: " << total_diff << std::endl;
   std::cout << "Max diff: " << max_diff << std::endl;
   std::cout << "Runtime: " << result.runtime_ms << " ms" << std::endl;
