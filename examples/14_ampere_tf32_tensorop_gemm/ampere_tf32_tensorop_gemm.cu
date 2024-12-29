@@ -101,7 +101,7 @@ struct Options {
   
   Options():
     help(false),
-    problem_size({4608, 3072, 12288}),
+    problem_size({1024, 1024, 1024}),
     batch_count(1),
     reference_check(true),
     iterations(20),
@@ -199,7 +199,7 @@ using SmArch = cutlass::arch::Sm80;
 
 // This code section describes the tile size a thread block will compute
 using ShapeMMAThreadBlock =
-    cutlass::gemm::GemmShape<256, 128, 32>;  // <- threadblock tile M = 128, N = 128, K = 16
+    cutlass::gemm::GemmShape<128, 256, 32>;  // <- threadblock tile M = 128, N = 256, K = 32
 // This code section describes tile size a warp will compute
 using ShapeMMAWarp = cutlass::gemm::GemmShape<64, 64, 32>;  // <- warp tile M = 64, N = 64, K = 16
 // This code section describes the size of MMA op

@@ -264,13 +264,13 @@ namespace cutlass
 
           // Compute initial location in logical coordinates
           cutlass::MatrixCoord tb_offset_A{
-              threadblock_tile_offset.m() * 256 /* Mma::Shape::kM */,
+              threadblock_tile_offset.m() * Mma::Shape::kM,
               threadblock_tile_offset.k() * params.gemm_k_size,
           };
 
           cutlass::MatrixCoord tb_offset_B{
               threadblock_tile_offset.k() * params.gemm_k_size,
-              threadblock_tile_offset.n() * 128 /* Mma::Shape::kN */};
+              threadblock_tile_offset.n() * Mma::Shape::kN};
 
           // Problem size is a function of threadblock index in the K dimension
           int problem_size_k = min(
@@ -278,7 +278,7 @@ namespace cutlass
               (threadblock_tile_offset.k() + 1) * params.gemm_k_size);
 
           // Compute threadblock-scoped matrix multiply-add
-          int gemm_k_iterations = (problem_size_k - tb_offset_A.column() + 32 /* Mma::Shape::kK */ - 1) / 32 /* Mma::Shape::kK */;
+          int gemm_k_iterations = (problem_size_k - tb_offset_A.column() + Mma::Shape::kK - 1) / Mma::Shape::kK;
 
           // Compute position within threadblock
           int thread_idx = threadIdx.x;
@@ -299,16 +299,16 @@ namespace cutlass
           using ElementAccumulator = float;
           using LayoutOutput = cutlass::layout::RowMajor;
 
-          using ShapeMMAThreadBlock = cutlass::gemm::GemmShape<256, 128, 32>;
+          using ShapeMMAThreadBlock = cutlass::gemm::GemmShape<128, 256, 32>;
           using ShapeMMAWarp = cutlass::gemm::GemmShape<64, 64, 32>;
 
-          using IteratorA = cutlass::transform::threadblock::PredicatedTileAccessIterator<cutlass::MatrixShape<256, 32>, ElementInputA, LayoutInputA, 1, cutlass::transform::PitchLinearWarpRakedThreadMap<cutlass::PitchLinearShape<32, 256>, 256, cutlass::PitchLinearShape<4, 8>, 8>, cutlass::Array<cutlass::bfloat16_t, 8, false>, false, cutlass::layout::NoPermute>;
-          using SmemIteratorA = cutlass::transform::threadblock::RegularTileAccessIterator<cutlass::MatrixShape<256, 32>, ElementInputA, cutlass::layout::RowMajorTensorOpMultiplicandCrosswise<16, 32>, 0, cutlass::transform::PitchLinearWarpRakedThreadMap<cutlass::PitchLinearShape<32, 256>, 256, cutlass::PitchLinearShape<4, 8>, 8>, 16>;
+          using IteratorA = cutlass::transform::threadblock::PredicatedTileAccessIterator<cutlass::MatrixShape<128, 32>, ElementInputA, LayoutInputA, 1, cutlass::transform::PitchLinearWarpRakedThreadMap<cutlass::PitchLinearShape<32, 128>, 256, cutlass::PitchLinearShape<4, 8>, 8>, cutlass::Array<cutlass::bfloat16_t, 8, false>, false, cutlass::layout::NoPermute>;
+          using SmemIteratorA = cutlass::transform::threadblock::RegularTileAccessIterator<cutlass::MatrixShape<128, 32>, ElementInputA, cutlass::layout::RowMajorTensorOpMultiplicandCrosswise<16, 32>, 0, cutlass::transform::PitchLinearWarpRakedThreadMap<cutlass::PitchLinearShape<32, 128>, 256, cutlass::PitchLinearShape<4, 8>, 8>, 16>;
           constexpr auto CacheOpA = cutlass::arch::CacheOperation::Global;
 
-          using IteratorB = cutlass::transform::threadblock::PredicatedTileAccessIterator<cutlass::MatrixShape<32, 128>, ElementInputB, LayoutInputB, 0, cutlass::transform::PitchLinearWarpRakedThreadMap<cutlass::PitchLinearShape<128, 32>, 256, cutlass::PitchLinearShape<8, 4>, 8>, cutlass::Array<cutlass::bfloat16_t, 8, false>, false, cutlass::layout::NoPermute>;
+          using IteratorB = cutlass::transform::threadblock::PredicatedTileAccessIterator<cutlass::MatrixShape<32, 256>, ElementInputB, LayoutInputB, 0, cutlass::transform::PitchLinearWarpRakedThreadMap<cutlass::PitchLinearShape<256, 32>, 256, cutlass::PitchLinearShape<8, 4>, 8>, cutlass::Array<cutlass::bfloat16_t, 8, false>, false, cutlass::layout::NoPermute>;
 
-          using SmemIteratorB = cutlass::transform::threadblock::RegularTileAccessIterator<cutlass::MatrixShape<32, 128>, ElementInputB, cutlass::layout::RowMajorTensorOpMultiplicandCongruous<16, 64>, 0, cutlass::transform::PitchLinearWarpRakedThreadMap<cutlass::PitchLinearShape<128, 32>, 256, cutlass::PitchLinearShape<8, 4>, 8>, 16>;
+          using SmemIteratorB = cutlass::transform::threadblock::RegularTileAccessIterator<cutlass::MatrixShape<32, 256>, ElementInputB, cutlass::layout::RowMajorTensorOpMultiplicandCongruous<16, 64>, 0, cutlass::transform::PitchLinearWarpRakedThreadMap<cutlass::PitchLinearShape<256, 32>, 256, cutlass::PitchLinearShape<8, 4>, 8>, 16>;
 
           constexpr auto CacheOpB = cutlass::arch::CacheOperation::Global;
 
@@ -391,9 +391,9 @@ namespace cutlass
           //   warp_idx_n: warp's position within the threadblock along the N dimension
           //   warp_idx_k: warp's position within the threadblock along the K dimension
 
-          const int WarpCount_kM = ShapeMMAThreadBlock::kM / ShapeMMAWarp::kM; // 256/64 = 4
-          const int WarpCount_kN = ShapeMMAThreadBlock::kN / ShapeMMAWarp::kN; // 128/64 = 2
-          const int WarpCount_kK = ShapeMMAThreadBlock::kK / ShapeMMAWarp::kK; // 32/32 = 1
+          const int WarpCount_kM = ShapeMMAThreadBlock::kM / ShapeMMAWarp::kM;
+          const int WarpCount_kN = ShapeMMAThreadBlock::kN / ShapeMMAWarp::kN;
+          const int WarpCount_kK = ShapeMMAThreadBlock::kK / ShapeMMAWarp::kK;
 
           int warp_idx_mn = warp_idx % (WarpCount_kM * WarpCount_kN);
           int warp_idx_k = warp_idx / (WarpCount_kM * WarpCount_kN);
@@ -403,12 +403,12 @@ namespace cutlass
 
           auto workerid = threadIdx.x / 32;
 
-          constexpr auto kAccessesPerGroupA = 2, kAccessesPerGroupB = 1;
-          constexpr auto AsyncCopyIterationsPerStageA = 4, AsyncCopyIterationsPerStageB = 2;
+          constexpr auto kAccessesPerGroupA = 1, kAccessesPerGroupB = 2,
+                         AsyncCopyIterationsPerStageA = 2, AsyncCopyIterationsPerStageB = 4;
 
           // kWarpGemmIterations
           constexpr auto kWarpGemmIterations = ShapeMMAWarp::kK / WarpTensorOp::Policy::MmaShape::kK; // 32/16=2
-          constexpr auto kSparsityBSize = 4;
+          constexpr auto kSparsityBSize = 8;
 
           // Add per-warp offsets in units of warp-level tiles
           warp_tile_iterator_A_.add_tile_offset(
@@ -702,22 +702,19 @@ namespace cutlass
               MmaOperandC *ptr_D = reinterpret_cast<MmaOperandC *>(&accumulators);
 
               auto cur_k_block = load_k_block_sparsity - (Stages - 1);
-              uint8_t local_sparsity_B = shared_storage.main_loop.sparsity_B.data()[((cur_k_block % Stages) * kWarpGemmIterations + warp_mma_k) * kSparsityBSize];
+              auto smem_sparsity_B_offset = ((cur_k_block % Stages) * kWarpGemmIterations + warp_mma_k) * kSparsityBSize;
+              uint8_t local_sparsity_B1 = shared_storage.main_loop.sparsity_B.data()[smem_sparsity_B_offset];
+              uint8_t local_sparsity_B2 = shared_storage.main_loop.sparsity_B.data()[smem_sparsity_B_offset + 4];
+              uint16_t local_sparsity_B = (local_sparsity_B1 << 8) | local_sparsity_B2;
+
               auto laneid = threadIdx.x % 32;
               auto warp_subtile_x = (workerid / WarpCount_kM);
-              // auto offset_N = threadblock_tile_offset.n();
-              // auto offset_K = params.grid_tiled_shape.n() * (cur_k_block * kWarpGemmIterations + warp_mma_k);
-              // uint8_t local_sparsity_B_global = params.sparsity_B[offset_K + offset_N];
-              // if (local_sparsity_B_global != local_sparsity_B && blockIdx.x == 0 && blockIdx.y == 0 && blockIdx.z == 0 && laneid == 0 && workerid == 0)
-              // {
-              //   printf("Worker %d: Mismatch at [%d, %d] = %d (global = %d)\n", workerid, cur_k_block, warp_mma_k, local_sparsity_B, local_sparsity_B_global);
-              // }
 
               CUTLASS_PRAGMA_UNROLL
               for (int two_n = 0; two_n < MmaIterations::kColumn; two_n += 2)
               {
-                auto bit_to_access = warp_subtile_x * WarpCount_kM + (two_n / 2);
-                if (!(local_sparsity_B & (1 << (7 - bit_to_access))))
+                auto bit_to_access = 15 - (warp_subtile_x * WarpCount_kN + (two_n / 2));
+                if (!((local_sparsity_B >> bit_to_access) & 1))
                   continue;
                 CUTLASS_PRAGMA_UNROLL
                 for (int n = two_n; n < two_n + 2; n++)
