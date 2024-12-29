@@ -101,7 +101,7 @@ struct Options {
   
   Options():
     help(false),
-    problem_size({1024, 1024, 1024}),
+    problem_size({4608, 3072, 12288}),
     batch_count(1),
     reference_check(true),
     iterations(20),

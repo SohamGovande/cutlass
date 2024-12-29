@@ -658,18 +658,25 @@ namespace cutlass
               pipe_state.warp_loaded_frag_A_[0],
               pipe_state.warp_loaded_frag_B_[0]);
 
+          uint8_t local_sparsity_B_doublebuf[2];
+          local_sparsity_B_doublebuf[0] = shared_storage.main_loop.sparsity_B.data()[workerid / 4 * 4];
+          local_sparsity_B_doublebuf[1] = shared_storage.main_loop.sparsity_B.data()[workerid / 4 * 4 + kSparsityBSize];
+          if (blockIdx.x == 0 && blockIdx.y == 0 && blockIdx.z == 0 && threadIdx.x == 0)
+          {
+            printf("INITIAL [%d.%d] local_sparsity_B_doublebuf[0] = %d\n", 0, 0, local_sparsity_B_doublebuf[0]);
+            printf("INITIAL [%d.%d] local_sparsity_B_doublebuf[1] = %d\n", 0, 1, local_sparsity_B_doublebuf[1]);
+          }
           // Mainloop
           CUTLASS_GEMM_LOOP
           for (int load_k_block_sparsity = Stages - 1;
                gemm_k_iterations > (-Stages + 1);
                load_k_block_sparsity++)
           {
+            auto smem_stage_read_idx_initial = smem_read_stage_idx_;
             // Unroll the warp-level MMA tiles of a threadblock's mainloop iteration
             CUTLASS_PRAGMA_UNROLL
             for (int warp_mma_k = 0; warp_mma_k < kWarpGemmIterations; ++warp_mma_k)
             {
-              // A = 256x16, B = 16x128
-
               // Load the next warp-tile's A fragment from shared memory
               warp_tile_iterator_A_.set_kgroup_index((warp_mma_k + 1) % kWarpGemmIterations);
               warp_tile_iterator_A_.load(pipe_state.warp_loaded_frag_A_[(warp_mma_k + 1) % 2]);
@@ -680,6 +687,16 @@ namespace cutlass
               warp_tile_iterator_B_.load(pipe_state.warp_loaded_frag_B_[(warp_mma_k + 1) % 2]);
               ++warp_tile_iterator_B_;
 
+              auto smem_sparsity_B_offset = (smem_stage_read_idx_initial * kWarpGemmIterations + (warp_mma_k + 1)) * kSparsityBSize + workerid / 4 * 4;
+              smem_sparsity_B_offset %= sizeof(shared_storage.main_loop.sparsity_B);
+              local_sparsity_B_doublebuf[(warp_mma_k + 1) % 2] = shared_storage.main_loop.sparsity_B.data()[smem_sparsity_B_offset];
+
+              auto local_sparsity_B_doublebuf_indexed = local_sparsity_B_doublebuf[warp_mma_k];
+              // auto local_sparsity_B_doublebuf_expected = shared_storage.main_loop.sparsity_B.data()[(smem_read_stage_idx_ * 2 + (warp_mma_k)) * kSparsityBSize + workerid / 4 * 4];
+              // if (blockIdx.x == 0 && blockIdx.y == 0 && blockIdx.z == 0 && threadIdx.x == 128 && load_k_block_sparsity < 10)
+              // {
+              //   printf("[%d.%d] offset=%d local_sparsity_B_doublebuf_indexed = %d, local_sparsity_B_doublebuf_expected = %d\n", load_k_block_sparsity - (Stages - 1), warp_mma_k, smem_sparsity_B_offset, local_sparsity_B_doublebuf_indexed, local_sparsity_B_doublebuf_expected);
+              // }
               // Except for the first warp-tile, all warp-tiles convert their incoming shared memory fragments as necessary
               if (warp_mma_k > 0)
               {
@@ -702,15 +719,16 @@ namespace cutlass
               MmaOperandC *ptr_D = reinterpret_cast<MmaOperandC *>(&accumulators);
 
               auto cur_k_block = load_k_block_sparsity - (Stages - 1);
-              auto smem_sparsity_B_offset = ((cur_k_block % Stages) * kWarpGemmIterations + warp_mma_k) * kSparsityBSize;
-              uint8_t local_sparsity_B = shared_storage.main_loop.sparsity_B.data()[smem_sparsity_B_offset + workerid / 4 * 4];
+
+              // uint8_t local_sparsity_B = shared_storage.main_loop.sparsity_B.data()[smem_sparsity_B_offset + workerid / 4 * 4];
+
               auto laneid = threadIdx.x % 32;
               auto warp_subtile_x = (workerid / WarpCount_kM);
               auto bit_to_access = 7 - ((warp_subtile_x % 2) * WarpCount_kN);
               CUTLASS_PRAGMA_UNROLL
               for (int two_n = 0; two_n < MmaIterations::kColumn; two_n += 2, bit_to_access--)
               {
-                if (!((local_sparsity_B >> bit_to_access) & 1))
+                if (!((local_sparsity_B_doublebuf_indexed >> bit_to_access) & 1))
                   continue;
                 CUTLASS_PRAGMA_UNROLL
                 for (int n = two_n; n < two_n + 2; n++)
