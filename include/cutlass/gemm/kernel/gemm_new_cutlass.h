@@ -305,11 +305,8 @@ namespace cutlass
           using IteratorA = cutlass::transform::threadblock::PredicatedTileAccessIterator<cutlass::MatrixShape<256, 32>, ElementInputA, LayoutInputA, 1, cutlass::transform::PitchLinearWarpRakedThreadMap<cutlass::PitchLinearShape<32, 256>, 256, cutlass::PitchLinearShape<4, 8>, 8>, cutlass::Array<cutlass::bfloat16_t, 8, false>, false, cutlass::layout::NoPermute>;
           using SmemIteratorA = cutlass::transform::threadblock::RegularTileAccessIterator<cutlass::MatrixShape<256, 32>, ElementInputA, cutlass::layout::RowMajorTensorOpMultiplicandCrosswise<16, 32>, 0, cutlass::transform::PitchLinearWarpRakedThreadMap<cutlass::PitchLinearShape<32, 256>, 256, cutlass::PitchLinearShape<4, 8>, 8>, 16>;
           constexpr auto CacheOpA = cutlass::arch::CacheOperation::Global;
-
           using IteratorB = cutlass::transform::threadblock::PredicatedTileAccessIterator<cutlass::MatrixShape<32, 128>, ElementInputB, LayoutInputB, 0, cutlass::transform::PitchLinearWarpRakedThreadMap<cutlass::PitchLinearShape<128, 32>, 256, cutlass::PitchLinearShape<8, 4>, 8>, cutlass::Array<cutlass::bfloat16_t, 8, false>, false, cutlass::layout::NoPermute>;
-
           using SmemIteratorB = cutlass::transform::threadblock::RegularTileAccessIterator<cutlass::MatrixShape<32, 128>, ElementInputB, cutlass::layout::RowMajorTensorOpMultiplicandCongruous<16, 64>, 0, cutlass::transform::PitchLinearWarpRakedThreadMap<cutlass::PitchLinearShape<128, 32>, 256, cutlass::PitchLinearShape<8, 4>, 8>, 16>;
-
           constexpr auto CacheOpB = cutlass::arch::CacheOperation::Global;
 
           IteratorA iterator_A(
@@ -327,19 +324,6 @@ namespace cutlass
               thread_idx,
               tb_offset_B,
               params.gather_B_indices);
-
-          auto find_in_B_smem = [&](__nv_bfloat16 value)
-          {
-            if (!(blockIdx.x == 0 && blockIdx.y == 0 && blockIdx.z == 0 && threadIdx.x == 0))
-              return;
-            for (int k = 0; k < Mma::Shape::kK; k++)
-            {
-              for (int n = 0; n < Mma::Shape::kN; n++)
-              {
-                // printf("(k, n) = (%d, %d), value = %f\n", k, n, smem_iterator_B_.get()[k * Mma::Shape::kN + n]);
-              }
-            }
-          };
 
           constexpr cutlass::gemm::SharedMemoryClearOption SharedMemoryClear = cutlass::gemm::SharedMemoryClearOption::kNone;
           using WarpTensorOp = cutlass::gemm::warp::MmaTensorOp<
@@ -369,10 +353,10 @@ namespace cutlass
               cutlass::MatrixShape<0, 0>,
               cutlass::MatrixShape<0, 0>,
               1>;
-          constexpr auto Stages = Mma::kStages;
+          constexpr auto Stages = 3;
 
           using MmaTypeForbidden = cutlass::gemm::threadblock::MmaMultistage<ShapeMMAThreadBlock, IteratorA, SmemIteratorA, CacheOpA, IteratorB, SmemIteratorB, CacheOpB, ElementAccumulator, LayoutOutput, Policy, Stages, SharedMemoryClear>;
-
+          using Detail = MmaTypeForbidden::Detail;
           // Declare variables that were fields in MmaMultistage
           typename WarpTensorOp::IteratorA warp_tile_iterator_A_(
               shared_storage.main_loop.operand_A_ref(), lane_idx);
@@ -402,9 +386,6 @@ namespace cutlass
           int warp_idx_n = warp_idx_mn / WarpCount_kM;
 
           auto workerid = threadIdx.x / 32;
-
-          constexpr auto kAccessesPerGroupA = 2, kAccessesPerGroupB = 1;
-          constexpr auto AsyncCopyIterationsPerStageA = 4, AsyncCopyIterationsPerStageB = 2;
 
           // kWarpGemmIterations
           constexpr auto kWarpGemmIterations = ShapeMMAWarp::kK / WarpTensorOp::Policy::MmaShape::kK; // 32/16=2
@@ -443,6 +424,7 @@ namespace cutlass
           auto smem_sparsity_B_iterator_write = shared_storage.main_loop.sparsity_B.data() + workerid * kSparsityBSize;
           auto load_sparsity_into_smem = [&](int cur_k_block, int cur_k_subtile)
           {
+            return;
             if (gemm_k_iterations <= 0)
               return;
             auto smem_sparsity_B = smem_sparsity_B_iterator_write + smem_write_stage_idx_ * kWarpGemmIterations * kSparsityBSize;
@@ -489,9 +471,9 @@ namespace cutlass
 
             // Async Copy for operand A
             CUTLASS_PRAGMA_UNROLL
-            for (int j = 0; j < kAccessesPerGroupA; ++j)
+            for (int j = 0; j < Detail::kAccessesPerGroupA; ++j)
             {
-              if (group_start_A + j < AsyncCopyIterationsPerStageA)
+              if (group_start_A + j < Detail::AsyncCopyIterationsPerStageA)
               {
                 typename IteratorA::AccessType *dst_ptr =
                     reinterpret_cast<typename IteratorA::AccessType *>(
@@ -506,8 +488,16 @@ namespace cutlass
                 {
                   auto gmem_ptr = iterator_A.get();
 
-                  cutlass::arch::cp_async<kSrcBytes, CacheOpA>(
-                      dst_ptr + v, gmem_ptr, iterator_A.valid());
+                  if (SharedMemoryClear == SharedMemoryClearOption::kZfill)
+                  {
+                    cutlass::arch::cp_async_zfill<kSrcBytes, CacheOpA>(
+                        dst_ptr + v, gmem_ptr, iterator_A.valid());
+                  }
+                  else
+                  {
+                    cutlass::arch::cp_async<kSrcBytes, CacheOpA>(
+                        dst_ptr + v, gmem_ptr, iterator_A.valid());
+                  }
 
                   ++iterator_A;
                 }
@@ -522,9 +512,9 @@ namespace cutlass
 
             // Async Copy for operand B
             CUTLASS_PRAGMA_UNROLL
-            for (int j = 0; j < kAccessesPerGroupB; ++j)
+            for (int j = 0; j < Detail::kAccessesPerGroupB; ++j)
             {
-              if (group_start_B + j < AsyncCopyIterationsPerStageB)
+              if (group_start_B + j < Detail::AsyncCopyIterationsPerStageB)
               {
                 typename IteratorB::AccessType *dst_ptr =
                     reinterpret_cast<typename IteratorB::AccessType *>(
@@ -539,8 +529,16 @@ namespace cutlass
                 {
                   auto gmem_ptr = iterator_B.get();
 
-                  cutlass::arch::cp_async<kSrcBytes, CacheOpB>(
-                      dst_ptr + v, gmem_ptr, iterator_B.valid());
+                  if (SharedMemoryClear == SharedMemoryClearOption::kZfill)
+                  {
+                    cutlass::arch::cp_async_zfill<kSrcBytes, CacheOpB>(
+                        dst_ptr + v, gmem_ptr, iterator_B.valid());
+                  }
+                  else
+                  {
+                    cutlass::arch::cp_async<kSrcBytes, CacheOpB>(
+                        dst_ptr + v, gmem_ptr, iterator_B.valid());
+                  }
 
                   ++iterator_B;
                 }
@@ -576,7 +574,7 @@ namespace cutlass
 
             // Async Copy for operand A
             CUTLASS_PRAGMA_UNROLL
-            for (int j = 0; j < AsyncCopyIterationsPerStageA; ++j)
+            for (int j = 0; j < Detail::AsyncCopyIterationsPerStageA; ++j)
             {
               typename IteratorA::AccessType *dst_ptr = reinterpret_cast<typename IteratorA::AccessType *>(smem_iterator_A_.get());
 
@@ -601,7 +599,7 @@ namespace cutlass
 
             // Async Copy for operand B
             CUTLASS_PRAGMA_UNROLL
-            for (int j = 0; j < AsyncCopyIterationsPerStageB; ++j)
+            for (int j = 0; j < Detail::AsyncCopyIterationsPerStageB; ++j)
             {
               typename IteratorB::AccessType *dst_ptr = reinterpret_cast<typename IteratorB::AccessType *>(smem_iterator_B_.get());
 
@@ -634,6 +632,54 @@ namespace cutlass
             cutlass::arch::cp_async_fence();
           }
 
+          // Optionally clear the remaining stages of SMEM. This is a functional requirement for
+          // some kernels so that all accumulator elements outside the GEMM footprint are zero.
+          if (SharedMemoryClear == SharedMemoryClearOption::kClearLastStage)
+          {
+
+            /// Iterator to write threadblock-scoped tile of A operand to shared memory
+            SmemIteratorA last_smem_iterator_A(smem_iterator_A_);
+            typename IteratorA::AccessType zero_A;
+
+            zero_A.clear();
+            last_smem_iterator_A.set_iteration_index(0);
+
+            // Async Copy for operand A
+            CUTLASS_PRAGMA_UNROLL
+            for (int j = 0; j < Detail::AsyncCopyIterationsPerStageA; ++j)
+            {
+
+              typename IteratorA::AccessType *dst_ptr =
+                  reinterpret_cast<typename IteratorA::AccessType *>(
+                      last_smem_iterator_A.get());
+
+              *dst_ptr = zero_A;
+
+              ++last_smem_iterator_A;
+            }
+
+            /// Iterator to write threadblock-scoped tile of B operand to shared memory
+            SmemIteratorB last_smem_iterator_B(smem_iterator_B_);
+            typename IteratorB::AccessType zero_B;
+
+            zero_B.clear();
+            last_smem_iterator_B.set_iteration_index(0);
+
+            // Async Copy for operand B
+            CUTLASS_PRAGMA_UNROLL
+            for (int j = 0; j < Detail::AsyncCopyIterationsPerStageB; ++j)
+            {
+
+              typename IteratorB::AccessType *dst_ptr =
+                  reinterpret_cast<typename IteratorB::AccessType *>(
+                      last_smem_iterator_B.get());
+
+              *dst_ptr = zero_B;
+
+              ++last_smem_iterator_B;
+            }
+          }
+
           // Wait until we have at least one completed global fetch stage
           cutlass::arch::cp_async_wait<Stages - 2>();
           __syncthreads();
@@ -657,6 +703,11 @@ namespace cutlass
               pipe_state.warp_transformed_frag_B_[0],
               pipe_state.warp_loaded_frag_A_[0],
               pipe_state.warp_loaded_frag_B_[0]);
+
+          if (Detail::kStagedAccumulation)
+          {
+            pipe_state.tmp_accum_.clear();
+          }
 
           // Mainloop
           CUTLASS_GEMM_LOOP
@@ -702,9 +753,9 @@ namespace cutlass
               MmaOperandC *ptr_D = reinterpret_cast<MmaOperandC *>(&accumulators);
 
               auto cur_k_block = load_k_block_sparsity - (Stages - 1);
-              uint8_t local_sparsity_B = shared_storage.main_loop.sparsity_B.data()[((cur_k_block % Stages) * kWarpGemmIterations + warp_mma_k) * kSparsityBSize];
-              auto laneid = threadIdx.x % 32;
-              auto warp_subtile_x = (workerid / WarpCount_kM);
+              // uint8_t local_sparsity_B = shared_storage.main_loop.sparsity_B.data()[((cur_k_block % Stages) * kWarpGemmIterations + warp_mma_k) * kSparsityBSize];
+              // auto laneid = threadIdx.x % 32;
+              // auto warp_subtile_x = (workerid / WarpCount_kM);
               // auto offset_N = threadblock_tile_offset.n();
               // auto offset_K = params.grid_tiled_shape.n() * (cur_k_block * kWarpGemmIterations + warp_mma_k);
               // uint8_t local_sparsity_B_global = params.sparsity_B[offset_K + offset_N];
@@ -716,9 +767,9 @@ namespace cutlass
               CUTLASS_PRAGMA_UNROLL
               for (int two_n = 0; two_n < MmaIterations::kColumn; two_n += 2)
               {
-                auto bit_to_access = warp_subtile_x * WarpCount_kM + (two_n / 2);
-                if (!(local_sparsity_B & (1 << (7 - bit_to_access))))
-                  continue;
+                // auto bit_to_access = warp_subtile_x * WarpCount_kM + (two_n / 2);
+                // if (!(local_sparsity_B & (1 << (7 - bit_to_access))))
+                //   continue;
                 CUTLASS_PRAGMA_UNROLL
                 for (int n = two_n; n < two_n + 2; n++)
                 {
@@ -737,11 +788,12 @@ namespace cutlass
 
               // Except for the last warp-tile, all warp-tiles issue their share of
               // global->shared fragment copies
-              if (warp_mma_k == 0)
+              if (warp_mma_k < kWarpGemmIterations - 1)
               {
+
                 int group_start_iteration_A, group_start_iteration_B;
-                group_start_iteration_A = warp_mma_k * kAccessesPerGroupA;
-                group_start_iteration_B = warp_mma_k * kAccessesPerGroupB;
+                group_start_iteration_A = warp_mma_k * Detail::kAccessesPerGroupA;
+                group_start_iteration_B = warp_mma_k * Detail::kAccessesPerGroupB;
                 if (workerid == warp_mma_k)
                   load_sparsity_into_smem(load_k_block_sparsity, warp_mma_k);
 
@@ -750,13 +802,17 @@ namespace cutlass
                     iterator_B,
                     group_start_iteration_A,
                     group_start_iteration_B);
-                // The second-to-last warp-tile also:
-                //   - performs the last warp-tile's share of global->shared fragment copies
-                //   - moves to the next global fetch stage
+              }
+
+              // The second-to-last warp-tile also:
+              //   - performs the last warp-tile's share of global->shared fragment copies
+              //   - moves to the next global fetch stage
+              if (warp_mma_k + 2 == kWarpGemmIterations)
+              {
 
                 // Performs the last warp-tile's share of global->shared fragment copies
-                group_start_iteration_A = (warp_mma_k + 1) * kAccessesPerGroupA;
-                group_start_iteration_B = (warp_mma_k + 1) * kAccessesPerGroupB;
+                int group_start_iteration_A = (warp_mma_k + 1) * Detail::kAccessesPerGroupA;
+                int group_start_iteration_B = (warp_mma_k + 1) * Detail::kAccessesPerGroupB;
 
                 copy_tiles_and_advance(
                     iterator_A,
@@ -782,8 +838,13 @@ namespace cutlass
                 iterator_A.clear_mask(gemm_k_iterations == 0);
                 iterator_B.clear_mask(gemm_k_iterations == 0);
               }
-              else
+
+              // The last warp-tile also converts the shared memory fragments used by
+              // the first warp-tile of the next iteration, if necessary (so we can
+              // immediately start issuing MMA instructions at the top of the loop )
+              if (warp_mma_k + 1 == kWarpGemmIterations)
               {
+
                 warp_mma_.transform(
                     pipe_state.warp_transformed_frag_A_[(warp_mma_k + 1) % 2],
                     pipe_state.warp_transformed_frag_B_[(warp_mma_k + 1) % 2],
@@ -793,10 +854,17 @@ namespace cutlass
             }
           }
 
+          if (Detail::kStagedAccumulation)
+          {
+            plus<FragmentC> plus_accum;
+            accumulators = plus_accum(accumulators, pipe_state.tmp_accum_);
+          }
+
           // Commit and drain all pending and predicated cp.async pnz from the GEMM mainloop
           cutlass::arch::cp_async_fence();
           cutlass::arch::cp_async_wait<0>();
           __syncthreads();
+          // End of inlined code from MmaMultistage::operator()
 
           //
           // Epilogue
@@ -813,8 +881,8 @@ namespace cutlass
 
           // assume identity swizzle
           MatrixCoord threadblock_offset(
-              threadblock_tile_offset.m() * Mma::Shape::kM,
-              threadblock_tile_offset.n() * Mma::Shape::kN);
+              threadblock_tile_offset.m() * 256 /* Mma::Shape::kM */,
+              threadblock_tile_offset.n() * 128 /* Mma::Shape::kN */);
 
           int block_idx = threadblock_tile_offset.m() + threadblock_tile_offset.n() * params.grid_tiled_shape.m();
 
