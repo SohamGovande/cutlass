@@ -703,17 +703,13 @@ namespace cutlass
 
               auto cur_k_block = load_k_block_sparsity - (Stages - 1);
               auto smem_sparsity_B_offset = ((cur_k_block % Stages) * kWarpGemmIterations + warp_mma_k) * kSparsityBSize;
-              uint8_t local_sparsity_B1 = shared_storage.main_loop.sparsity_B.data()[smem_sparsity_B_offset];
-              uint8_t local_sparsity_B2 = shared_storage.main_loop.sparsity_B.data()[smem_sparsity_B_offset + 4];
-              uint16_t local_sparsity_B = (local_sparsity_B1 << 8) | local_sparsity_B2;
-
+              uint8_t local_sparsity_B = shared_storage.main_loop.sparsity_B.data()[smem_sparsity_B_offset + workerid / 4 * 4];
               auto laneid = threadIdx.x % 32;
               auto warp_subtile_x = (workerid / WarpCount_kM);
-
+              auto bit_to_access = 7 - ((warp_subtile_x % 2) * WarpCount_kN);
               CUTLASS_PRAGMA_UNROLL
-              for (int two_n = 0; two_n < MmaIterations::kColumn; two_n += 2)
+              for (int two_n = 0; two_n < MmaIterations::kColumn; two_n += 2, bit_to_access--)
               {
-                auto bit_to_access = 15 - (warp_subtile_x * WarpCount_kN + (two_n / 2));
                 if (!((local_sparsity_B >> bit_to_access) & 1))
                   continue;
                 CUTLASS_PRAGMA_UNROLL
