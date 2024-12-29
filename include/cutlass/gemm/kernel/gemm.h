@@ -631,54 +631,6 @@ namespace cutlass
             cutlass::arch::cp_async_fence();
           }
 
-          // Optionally clear the remaining stages of SMEM. This is a functional requirement for
-          // some kernels so that all accumulator elements outside the GEMM footprint are zero.
-          if (SharedMemoryClear == SharedMemoryClearOption::kClearLastStage)
-          {
-
-            /// Iterator to write threadblock-scoped tile of A operand to shared memory
-            SmemIteratorA last_smem_iterator_A(smem_iterator_A_);
-            typename IteratorA::AccessType zero_A;
-
-            zero_A.clear();
-            last_smem_iterator_A.set_iteration_index(0);
-
-            // Async Copy for operand A
-            CUTLASS_PRAGMA_UNROLL
-            for (int j = 0; j < Detail::AsyncCopyIterationsPerStageA; ++j)
-            {
-
-              typename IteratorA::AccessType *dst_ptr =
-                  reinterpret_cast<typename IteratorA::AccessType *>(
-                      last_smem_iterator_A.get());
-
-              *dst_ptr = zero_A;
-
-              ++last_smem_iterator_A;
-            }
-
-            /// Iterator to write threadblock-scoped tile of B operand to shared memory
-            SmemIteratorB last_smem_iterator_B(smem_iterator_B_);
-            typename IteratorB::AccessType zero_B;
-
-            zero_B.clear();
-            last_smem_iterator_B.set_iteration_index(0);
-
-            // Async Copy for operand B
-            CUTLASS_PRAGMA_UNROLL
-            for (int j = 0; j < Detail::AsyncCopyIterationsPerStageB; ++j)
-            {
-
-              typename IteratorB::AccessType *dst_ptr =
-                  reinterpret_cast<typename IteratorB::AccessType *>(
-                      last_smem_iterator_B.get());
-
-              *dst_ptr = zero_B;
-
-              ++last_smem_iterator_B;
-            }
-          }
-
           // Wait until we have at least one completed global fetch stage
           cutlass::arch::cp_async_wait<Stages - 2>();
           __syncthreads();
