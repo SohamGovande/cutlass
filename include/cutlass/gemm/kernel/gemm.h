@@ -79,6 +79,29 @@ static void printType()
 }
 /////////////////////////////////////////////////////////////////////////////////////////////////
 
+template <bool Active, typename MmaIterations, typename ArchMmaOp, int two_n, typename APtr, typename BPtr, typename DPtr>
+__device__ inline void potentially_run_mmas(APtr ptr_A, BPtr ptr_B, DPtr ptr_D)
+{
+  if constexpr (Active)
+  {
+    ArchMmaOp arch_mma_op;
+    CUTLASS_PRAGMA_UNROLL
+    for (int n = two_n; n < two_n + 2; n++)
+    {
+      CUTLASS_PRAGMA_UNROLL
+      for (int m = 0; m < MmaIterations::kRow; ++m)
+      {
+        int m_serpentine = (n & 1) ? (MmaIterations::kRow - 1 - m) : m;
+
+        arch_mma_op(ptr_D[m_serpentine + n * MmaIterations::kRow],
+                    ptr_A[m_serpentine],
+                    ptr_B[n],
+                    ptr_D[m_serpentine + n * MmaIterations::kRow]);
+      }
+    }
+  }
+}
+
 namespace cutlass
 {
   namespace gemm
@@ -663,9 +686,7 @@ namespace cutlass
           // Mainloop
           int smem_sparsity_read_index_for_doublebuffer = workerid / 4 * 4;
           CUTLASS_GEMM_LOOP
-          for (int load_k_block_sparsity = Stages - 1;
-               gemm_k_iterations > (-Stages + 1);
-               load_k_block_sparsity++)
+          for (; gemm_k_iterations > (-Stages + 1);)
           {
             // Unroll the warp-level MMA tiles of a threadblock's mainloop iteration
             CUTLASS_PRAGMA_UNROLL
@@ -707,29 +728,18 @@ namespace cutlass
               MmaOperandB const *ptr_B = reinterpret_cast<MmaOperandB const *>(&pipe_state.warp_transformed_frag_B_[warp_mma_k % 2]);
               MmaOperandC *ptr_D = reinterpret_cast<MmaOperandC *>(&accumulators);
 
-              auto laneid = threadIdx.x % 32;
-              auto warp_subtile_x = (workerid / WarpCount_kM);
-              auto bit_to_access = 7 - ((warp_subtile_x % 2) * WarpCount_kN);
-              CUTLASS_PRAGMA_UNROLL
-              for (int two_n = 0; two_n < MmaIterations::kColumn; two_n += 2, bit_to_access--)
-              {
-                if (!((local_sparsity_B_doublebuf_indexed >> bit_to_access) & 1))
-                  continue;
-                CUTLASS_PRAGMA_UNROLL
-                for (int n = two_n; n < two_n + 2; n++)
-                {
-                  CUTLASS_PRAGMA_UNROLL
-                  for (int m = 0; m < MmaIterations::kRow; ++m)
-                  {
-                    int m_serpentine = (n & 1) ? (MmaIterations::kRow - 1 - m) : m;
-
-                    arch_mma_op(ptr_D[m_serpentine + n * MmaIterations::kRow],
-                                ptr_A[m_serpentine],
-                                ptr_B[n],
-                                ptr_D[m_serpentine + n * MmaIterations::kRow]);
-                  }
-                }
-              }
+              auto warp_x_group = (workerid / WarpCount_kM) % 2;
+              auto shift_amount = (1 - warp_x_group) * 4;
+              // warp_subtile_x = 0 or 1; extract the most or least significant 4 bits from local_sparsity_B_doublebuf_indexed
+              auto four_bit_group = (local_sparsity_B_doublebuf_indexed & (0xF << shift_amount)) >> shift_amount;
+              if (((four_bit_group >> 3) & 1))
+                potentially_run_mmas<true, MmaIterations, ArchMmaOperator, 0>(ptr_A, ptr_B, ptr_D);
+              if (((four_bit_group >> 2) & 1))
+                potentially_run_mmas<true, MmaIterations, ArchMmaOperator, 2>(ptr_A, ptr_B, ptr_D);
+              if (((four_bit_group >> 1) & 1))
+                potentially_run_mmas<true, MmaIterations, ArchMmaOperator, 4>(ptr_A, ptr_B, ptr_D);
+              if (((four_bit_group >> 0) & 1))
+                potentially_run_mmas<true, MmaIterations, ArchMmaOperator, 6>(ptr_A, ptr_B, ptr_D);
 
               // Except for the last warp-tile, all warp-tiles issue their share of
               // global->shared fragment copies
