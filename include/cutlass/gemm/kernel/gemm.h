@@ -105,6 +105,10 @@ __device__ inline void potentially_run_mmas(APtr ptr_A, BPtr ptr_B, DPtr ptr_D)
 template <bool Active1, bool Active2, bool Active3, bool Active4, typename MmaIterations, typename ArchMmaOp, typename APtr, typename BPtr, typename DPtr>
 __device__ inline void potentially_run_four_mmas(APtr ptr_A, BPtr ptr_B, DPtr ptr_D)
 {
+  if (blockIdx.x == 0 && blockIdx.y == 0 && blockIdx.z == 0 && threadIdx.x == 0)
+  {
+    printf("Active1: %d, Active2: %d, Active3: %d, Active4: %d\n", Active1, Active2, Active3, Active4);
+  }
   potentially_run_mmas<Active1, MmaIterations, ArchMmaOp, 0>(ptr_A, ptr_B, ptr_D);
   potentially_run_mmas<Active2, MmaIterations, ArchMmaOp, 2>(ptr_A, ptr_B, ptr_D);
   potentially_run_mmas<Active3, MmaIterations, ArchMmaOp, 4>(ptr_A, ptr_B, ptr_D);
@@ -279,7 +283,16 @@ namespace cutlass
         CUTLASS_DEVICE
         void operator()(Params const &params, SharedStorage &shared_storage)
         {
-
+          asm volatile("ts0: .branchtargets "
+          "b0_0000, b0_0001, b0_0010, b0_0011, "
+          "b0_0100, b0_0101, b0_0110, b0_0111, "
+          "b0_1000, b0_1001, b0_1010, b0_1011, "
+          "b0_1100, b0_1101, b0_1110, b0_1111;");
+          // asm volatile("ts1: .branchtargets "
+          // "b1_0000, b1_0001, b1_0010, b1_0011, "
+          // "b1_0100, b1_0101, b1_0110, b1_0111, "
+          // "b1_1000, b1_1001, b1_1010, b1_1011, "
+          // "b1_1100, b1_1101, b1_1110, b1_1111;");
           // Compute threadblock location
           ThreadblockSwizzle threadblock_swizzle;
 
@@ -697,11 +710,13 @@ namespace cutlass
           CUTLASS_GEMM_LOOP
           for (; gemm_k_iterations > (-Stages + 1);)
           {
+#define DefineLabel(label) asm(#label ":");
+#define GotoLabel(label) if (gemm_k_iterations < 21741483) goto label;
+
             // Unroll the warp-level MMA tiles of a threadblock's mainloop iteration
-            CUTLASS_PRAGMA_UNROLL
-            for (int warp_mma_k = 0; warp_mma_k < kWarpGemmIterations; ++warp_mma_k)
-            {
-              // Load the next warp-tile's A fragment from shared memory
+            constexpr int warp_mma_k = 0;
+            constexpr int warp_mma_k_1 = 1;
+            { // Load the next warp-tile's A fragment from shared memory
               warp_tile_iterator_A_.set_kgroup_index((warp_mma_k + 1) % kWarpGemmIterations);
               warp_tile_iterator_A_.load(pipe_state.warp_loaded_frag_A_[(warp_mma_k + 1) % 2]);
               ++warp_tile_iterator_A_;
@@ -740,95 +755,202 @@ namespace cutlass
               auto warp_x_group = (workerid / WarpCount_kM) % 2;
               auto shift_amount = (1 - warp_x_group) * 4;
               // warp_subtile_x = 0 or 1; extract the most or least significant 4 bits from local_sparsity_B_doublebuf_indexed
-              auto four_bit_group = (local_sparsity_B_doublebuf_indexed & (0xF << shift_amount)) >> shift_amount;
-              if (four_bit_group == 0b0000)
-                potentially_run_four_mmas<0, 0, 0, 0, MmaIterations, ArchMmaOperator>(ptr_A, ptr_B, ptr_D);
-              else if (four_bit_group == 0b0001)
-                potentially_run_four_mmas<0, 0, 0, 1, MmaIterations, ArchMmaOperator>(ptr_A, ptr_B, ptr_D);
-              else if (four_bit_group == 0b0010)
-                potentially_run_four_mmas<0, 0, 1, 0, MmaIterations, ArchMmaOperator>(ptr_A, ptr_B, ptr_D);
-              else if (four_bit_group == 0b0011)
-                potentially_run_four_mmas<0, 0, 1, 1, MmaIterations, ArchMmaOperator>(ptr_A, ptr_B, ptr_D);
-              else if (four_bit_group == 0b0100)
-                potentially_run_four_mmas<0, 1, 0, 0, MmaIterations, ArchMmaOperator>(ptr_A, ptr_B, ptr_D);
-              else if (four_bit_group == 0b0101)
-                potentially_run_four_mmas<0, 1, 0, 1, MmaIterations, ArchMmaOperator>(ptr_A, ptr_B, ptr_D);
-              else if (four_bit_group == 0b0110)
-                potentially_run_four_mmas<0, 1, 1, 0, MmaIterations, ArchMmaOperator>(ptr_A, ptr_B, ptr_D);
-              else if (four_bit_group == 0b0111)
-                potentially_run_four_mmas<0, 1, 1, 1, MmaIterations, ArchMmaOperator>(ptr_A, ptr_B, ptr_D);
-              else if (four_bit_group == 0b1000)
-                potentially_run_four_mmas<1, 0, 0, 0, MmaIterations, ArchMmaOperator>(ptr_A, ptr_B, ptr_D);
-              else if (four_bit_group == 0b1001)
-                potentially_run_four_mmas<1, 0, 0, 1, MmaIterations, ArchMmaOperator>(ptr_A, ptr_B, ptr_D);
-              else if (four_bit_group == 0b1010)
-                potentially_run_four_mmas<1, 0, 1, 0, MmaIterations, ArchMmaOperator>(ptr_A, ptr_B, ptr_D);
-              else if (four_bit_group == 0b1011)
-                potentially_run_four_mmas<1, 0, 1, 1, MmaIterations, ArchMmaOperator>(ptr_A, ptr_B, ptr_D);
-              else if (four_bit_group == 0b1100)
-                potentially_run_four_mmas<1, 1, 0, 0, MmaIterations, ArchMmaOperator>(ptr_A, ptr_B, ptr_D);
-              else if (four_bit_group == 0b1101)
-                potentially_run_four_mmas<1, 1, 0, 1, MmaIterations, ArchMmaOperator>(ptr_A, ptr_B, ptr_D);
-              else if (four_bit_group == 0b1110)
-                potentially_run_four_mmas<1, 1, 1, 0, MmaIterations, ArchMmaOperator>(ptr_A, ptr_B, ptr_D);
-              else /*if (four_bit_group == 0b1111)*/
-                potentially_run_four_mmas<1, 1, 1, 1, MmaIterations, ArchMmaOperator>(ptr_A, ptr_B, ptr_D);
+              uint32_t four_bit_group = (local_sparsity_B_doublebuf_indexed & (0xF << shift_amount)) >> shift_amount;
+
+              asm volatile("brx.idx.uni %0, ts0;" ::"r"(four_bit_group));
+              DefineLabel(b0_0000);
+              potentially_run_four_mmas<0, 0, 0, 0, MmaIterations, ArchMmaOperator>(ptr_A, ptr_B, ptr_D);
+              GotoLabel(done_with_mmas_zero);
+              DefineLabel(b0_0001);
+              potentially_run_four_mmas<0, 0, 0, 1, MmaIterations, ArchMmaOperator>(ptr_A, ptr_B, ptr_D);
+              GotoLabel(done_with_mmas_zero);
+              DefineLabel(b0_0010);
+              potentially_run_four_mmas<0, 0, 1, 0, MmaIterations, ArchMmaOperator>(ptr_A, ptr_B, ptr_D);
+              GotoLabel(done_with_mmas_zero);
+              DefineLabel(b0_0011);
+              potentially_run_four_mmas<0, 0, 1, 1, MmaIterations, ArchMmaOperator>(ptr_A, ptr_B, ptr_D);
+              GotoLabel(done_with_mmas_zero);
+              DefineLabel(b0_0100);
+              potentially_run_four_mmas<0, 1, 0, 0, MmaIterations, ArchMmaOperator>(ptr_A, ptr_B, ptr_D);
+              GotoLabel(done_with_mmas_zero);
+              DefineLabel(b0_0101);
+              potentially_run_four_mmas<0, 1, 0, 1, MmaIterations, ArchMmaOperator>(ptr_A, ptr_B, ptr_D);
+              GotoLabel(done_with_mmas_zero);
+              DefineLabel(b0_0110);
+              potentially_run_four_mmas<0, 1, 1, 0, MmaIterations, ArchMmaOperator>(ptr_A, ptr_B, ptr_D);
+              GotoLabel(done_with_mmas_zero);
+              DefineLabel(b0_0111);
+              potentially_run_four_mmas<0, 1, 1, 1, MmaIterations, ArchMmaOperator>(ptr_A, ptr_B, ptr_D);
+              GotoLabel(done_with_mmas_zero);
+              DefineLabel(b0_1000);
+              potentially_run_four_mmas<1, 0, 0, 0, MmaIterations, ArchMmaOperator>(ptr_A, ptr_B, ptr_D);
+              GotoLabel(done_with_mmas_zero);
+              DefineLabel(b0_1001);
+              potentially_run_four_mmas<1, 0, 0, 1, MmaIterations, ArchMmaOperator>(ptr_A, ptr_B, ptr_D);
+              GotoLabel(done_with_mmas_zero);
+              DefineLabel(b0_1010);
+              potentially_run_four_mmas<1, 0, 1, 0, MmaIterations, ArchMmaOperator>(ptr_A, ptr_B, ptr_D);
+              GotoLabel(done_with_mmas_zero);
+              DefineLabel(b0_1011);
+              potentially_run_four_mmas<1, 0, 1, 1, MmaIterations, ArchMmaOperator>(ptr_A, ptr_B, ptr_D);
+              GotoLabel(done_with_mmas_zero);
+              DefineLabel(b0_1100);
+              potentially_run_four_mmas<1, 1, 0, 0, MmaIterations, ArchMmaOperator>(ptr_A, ptr_B, ptr_D);
+              GotoLabel(done_with_mmas_zero);
+              DefineLabel(b0_1101);
+              potentially_run_four_mmas<1, 1, 0, 1, MmaIterations, ArchMmaOperator>(ptr_A, ptr_B, ptr_D);
+              GotoLabel(done_with_mmas_zero);
+              DefineLabel(b0_1110);
+              potentially_run_four_mmas<1, 1, 1, 0, MmaIterations, ArchMmaOperator>(ptr_A, ptr_B, ptr_D);
+              GotoLabel(done_with_mmas_zero);
+              DefineLabel(b0_1111);
+              potentially_run_four_mmas<1, 1, 1, 1, MmaIterations, ArchMmaOperator>(ptr_A, ptr_B, ptr_D);
+              GotoLabel(done_with_mmas_zero);
+
+            done_with_mmas_zero:
               // Except for the last warp-tile, all warp-tiles issue their share of
               // global->shared fragment copies
-              if (warp_mma_k == 0)
-              {
-                int group_start_iteration_A, group_start_iteration_B;
-                group_start_iteration_A = warp_mma_k * kAccessesPerGroupA;
-                group_start_iteration_B = warp_mma_k * kAccessesPerGroupB;
-                if (workerid == warp_mma_k)
-                  load_sparsity_into_smem();
+              int group_start_iteration_A, group_start_iteration_B;
+              group_start_iteration_A = warp_mma_k * kAccessesPerGroupA;
+              group_start_iteration_B = warp_mma_k * kAccessesPerGroupB;
+              if (workerid == warp_mma_k)
+                load_sparsity_into_smem();
 
-                copy_tiles_and_advance(
-                    iterator_A,
-                    iterator_B,
-                    group_start_iteration_A,
-                    group_start_iteration_B);
-                // The second-to-last warp-tile also:
-                //   - performs the last warp-tile's share of global->shared fragment copies
-                //   - moves to the next global fetch stage
+              copy_tiles_and_advance(
+                  iterator_A,
+                  iterator_B,
+                  group_start_iteration_A,
+                  group_start_iteration_B);
+              // The second-to-last warp-tile also:
+              //   - performs the last warp-tile's share of global->shared fragment copies
+              //   - moves to the next global fetch stage
 
-                // Performs the last warp-tile's share of global->shared fragment copies
-                group_start_iteration_A = (warp_mma_k + 1) * kAccessesPerGroupA;
-                group_start_iteration_B = (warp_mma_k + 1) * kAccessesPerGroupB;
+              // Performs the last warp-tile's share of global->shared fragment copies
+              group_start_iteration_A = (warp_mma_k + 1) * kAccessesPerGroupA;
+              group_start_iteration_B = (warp_mma_k + 1) * kAccessesPerGroupB;
 
-                copy_tiles_and_advance(
-                    iterator_A,
-                    iterator_B,
-                    group_start_iteration_A,
-                    group_start_iteration_B);
-                if (workerid == warp_mma_k + 1)
-                  load_sparsity_into_smem();
+              copy_tiles_and_advance(
+                  iterator_A,
+                  iterator_B,
+                  group_start_iteration_A,
+                  group_start_iteration_B);
+              if (workerid == warp_mma_k + 1)
+                load_sparsity_into_smem();
 
-                // Inserts a memory fence between stages of cp.async instructions.
-                cutlass::arch::cp_async_fence();
+              // Inserts a memory fence between stages of cp.async instructions.
+              cutlass::arch::cp_async_fence();
 
-                // Wait until we have at least one completed global fetch stage
-                cutlass::arch::cp_async_wait<Stages - 2>();
-                __syncthreads();
+              // Wait until we have at least one completed global fetch stage
+              cutlass::arch::cp_async_wait<Stages - 2>();
+              __syncthreads();
 
-                // Move to the next global fetch stage
-                advance_smem_write_stage(iterator_A, iterator_B);
-                advance_smem_read_stage();
+              // Move to the next global fetch stage
+              advance_smem_write_stage(iterator_A, iterator_B);
+              advance_smem_read_stage();
 
-                // Disable global fetching when done with global fetch iterations
-                --gemm_k_iterations;
-                iterator_A.clear_mask(gemm_k_iterations == 0);
-                iterator_B.clear_mask(gemm_k_iterations == 0);
-              }
-              else
-              {
-                warp_mma_.transform(
-                    pipe_state.warp_transformed_frag_A_[(warp_mma_k + 1) % 2],
-                    pipe_state.warp_transformed_frag_B_[(warp_mma_k + 1) % 2],
-                    pipe_state.warp_loaded_frag_A_[(warp_mma_k + 1) % 2],
-                    pipe_state.warp_loaded_frag_B_[(warp_mma_k + 1) % 2]);
-              }
+              // Disable global fetching when done with global fetch iterations
+              --gemm_k_iterations;
+              iterator_A.clear_mask(gemm_k_iterations == 0);
+              iterator_B.clear_mask(gemm_k_iterations == 0);
             }
+            {
+              // Load the next warp-tile's A fragment from shared memory
+              warp_tile_iterator_A_.set_kgroup_index((warp_mma_k_1 + 1) % kWarpGemmIterations);
+              warp_tile_iterator_A_.load(pipe_state.warp_loaded_frag_A_[(warp_mma_k_1 + 1) % 2]);
+              ++warp_tile_iterator_A_;
+
+              // Load the next warp-tile's B fragment from shared memory
+              warp_tile_iterator_B_.set_kgroup_index((warp_mma_k_1 + 1) % kWarpGemmIterations);
+              warp_tile_iterator_B_.load(pipe_state.warp_loaded_frag_B_[(warp_mma_k_1 + 1) % 2]);
+              ++warp_tile_iterator_B_;
+
+              smem_sparsity_read_index_for_doublebuffer += kSparsityBSize;
+              smem_sparsity_read_index_for_doublebuffer %= sizeof(shared_storage.main_loop.sparsity_B);
+              local_sparsity_B_doublebuf[(warp_mma_k_1 + 1) % 2] = shared_storage.main_loop.sparsity_B.data()[smem_sparsity_read_index_for_doublebuffer];
+              uint8_t local_sparsity_B_doublebuf_indexed = local_sparsity_B_doublebuf[warp_mma_k_1];
+
+              // Except for the first warp-tile, all warp-tiles convert their incoming shared memory fragments as necessary
+              warp_mma_.transform(
+                  pipe_state.warp_transformed_frag_A_[warp_mma_k_1 % 2],
+                  pipe_state.warp_transformed_frag_B_[warp_mma_k_1 % 2],
+                  pipe_state.warp_loaded_frag_A_[warp_mma_k_1 % 2],
+                  pipe_state.warp_loaded_frag_B_[warp_mma_k_1 % 2]);
+              using ArchMmaOperator = typename WarpTensorOp::ArchMmaOperator;
+              using MmaIterations = typename WarpTensorOp::MmaIterations;
+
+              ArchMmaOperator arch_mma_op;
+              using MmaOperandA = typename ArchMmaOperator::FragmentA;
+              using MmaOperandB = typename ArchMmaOperator::FragmentB;
+              using MmaOperandC = typename ArchMmaOperator::FragmentC;
+
+              MmaOperandA const *ptr_A = reinterpret_cast<MmaOperandA const *>(&pipe_state.warp_transformed_frag_A_[warp_mma_k_1 % 2]);
+              MmaOperandB const *ptr_B = reinterpret_cast<MmaOperandB const *>(&pipe_state.warp_transformed_frag_B_[warp_mma_k_1 % 2]);
+              MmaOperandC *ptr_D = reinterpret_cast<MmaOperandC *>(&accumulators);
+
+              auto warp_x_group = (workerid / WarpCount_kM) % 2;
+              auto shift_amount = (1 - warp_x_group) * 4;
+              // warp_subtile_x = 0 or 1; extract the most or least significant 4 bits from local_sparsity_B_doublebuf_indexed
+              uint32_t four_bit_group = (local_sparsity_B_doublebuf_indexed & (0xF << shift_amount)) >> shift_amount;
+
+            //   asm volatile("brx.idx %0, ts1;" ::"r"(four_bit_group));
+            //   DefineLabel(b1_0000);
+            //   potentially_run_four_mmas<0, 0, 0, 0, MmaIterations, ArchMmaOperator>(ptr_A, ptr_B, ptr_D);
+            //   GotoLabel(done_with_mmas_one);
+            //   DefineLabel(b1_0001);
+            //   potentially_run_four_mmas<0, 0, 0, 1, MmaIterations, ArchMmaOperator>(ptr_A, ptr_B, ptr_D);
+            //   GotoLabel(done_with_mmas_one);
+            //   DefineLabel(b1_0010);
+            //   potentially_run_four_mmas<0, 0, 1, 0, MmaIterations, ArchMmaOperator>(ptr_A, ptr_B, ptr_D);
+            //   GotoLabel(done_with_mmas_one);
+            //   DefineLabel(b1_0011);
+            //   potentially_run_four_mmas<0, 0, 1, 1, MmaIterations, ArchMmaOperator>(ptr_A, ptr_B, ptr_D);
+            //   GotoLabel(done_with_mmas_one);
+            //   DefineLabel(b1_0100);
+            //   potentially_run_four_mmas<0, 1, 0, 0, MmaIterations, ArchMmaOperator>(ptr_A, ptr_B, ptr_D);
+            //   GotoLabel(done_with_mmas_one);
+            //   DefineLabel(b1_0101);
+            //   potentially_run_four_mmas<0, 1, 0, 1, MmaIterations, ArchMmaOperator>(ptr_A, ptr_B, ptr_D);
+            //   GotoLabel(done_with_mmas_one);
+            //   DefineLabel(b1_0110);
+            //   potentially_run_four_mmas<0, 1, 1, 0, MmaIterations, ArchMmaOperator>(ptr_A, ptr_B, ptr_D);
+            //   GotoLabel(done_with_mmas_one);
+            //   DefineLabel(b1_0111);
+            //   potentially_run_four_mmas<0, 1, 1, 1, MmaIterations, ArchMmaOperator>(ptr_A, ptr_B, ptr_D);
+            //   GotoLabel(done_with_mmas_one);
+            //   DefineLabel(b1_1000);
+            //   potentially_run_four_mmas<1, 0, 0, 0, MmaIterations, ArchMmaOperator>(ptr_A, ptr_B, ptr_D);
+            //   GotoLabel(done_with_mmas_one);
+            //   DefineLabel(b1_1001);
+            //   potentially_run_four_mmas<1, 0, 0, 1, MmaIterations, ArchMmaOperator>(ptr_A, ptr_B, ptr_D);
+            //   GotoLabel(done_with_mmas_one);
+            //   DefineLabel(b1_1010);
+            //   potentially_run_four_mmas<1, 0, 1, 0, MmaIterations, ArchMmaOperator>(ptr_A, ptr_B, ptr_D);
+            //   GotoLabel(done_with_mmas_one);
+            //   DefineLabel(b1_1011);
+            //   potentially_run_four_mmas<1, 0, 1, 1, MmaIterations, ArchMmaOperator>(ptr_A, ptr_B, ptr_D);
+            //   GotoLabel(done_with_mmas_one);
+            //   DefineLabel(b1_1100);
+            //   potentially_run_four_mmas<1, 1, 0, 0, MmaIterations, ArchMmaOperator>(ptr_A, ptr_B, ptr_D);
+            //   GotoLabel(done_with_mmas_one);
+            //   DefineLabel(b1_1101);
+            //   potentially_run_four_mmas<1, 1, 0, 1, MmaIterations, ArchMmaOperator>(ptr_A, ptr_B, ptr_D);
+            //   GotoLabel(done_with_mmas_one);
+            //   DefineLabel(b1_1110);
+            //   potentially_run_four_mmas<1, 1, 1, 0, MmaIterations, ArchMmaOperator>(ptr_A, ptr_B, ptr_D);
+            //   GotoLabel(done_with_mmas_one);
+            //   DefineLabel(b1_1111);
+            //   potentially_run_four_mmas<1, 1, 1, 1, MmaIterations, ArchMmaOperator>(ptr_A, ptr_B, ptr_D);
+            //   GotoLabel(done_with_mmas_one);
+
+            // done_with_mmas_one:
+              // Except for the last warp-tile, all warp-tiles issue their share of
+              // global->shared fragment copies
+                warp_mma_.transform(
+                    pipe_state.warp_transformed_frag_A_[(warp_mma_k_1 + 1) % 2],
+                    pipe_state.warp_transformed_frag_B_[(warp_mma_k_1 + 1) % 2],
+                    pipe_state.warp_loaded_frag_A_[(warp_mma_k_1 + 1) % 2],
+                    pipe_state.warp_loaded_frag_B_[(warp_mma_k_1 + 1) % 2]);
+              }
           }
 
           // Commit and drain all pending and predicated cp.async pnz from the GEMM mainloop
