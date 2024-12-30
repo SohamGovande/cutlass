@@ -102,6 +102,15 @@ __device__ inline void potentially_run_mmas(APtr ptr_A, BPtr ptr_B, DPtr ptr_D)
   }
 }
 
+template <bool Active1, bool Active2, bool Active3, bool Active4, typename MmaIterations, typename ArchMmaOp, typename APtr, typename BPtr, typename DPtr>
+__device__ inline void potentially_run_four_mmas(APtr ptr_A, BPtr ptr_B, DPtr ptr_D)
+{
+  potentially_run_mmas<Active1, MmaIterations, ArchMmaOp, 0>(ptr_A, ptr_B, ptr_D);
+  potentially_run_mmas<Active2, MmaIterations, ArchMmaOp, 2>(ptr_A, ptr_B, ptr_D);
+  potentially_run_mmas<Active3, MmaIterations, ArchMmaOp, 4>(ptr_A, ptr_B, ptr_D);
+  potentially_run_mmas<Active4, MmaIterations, ArchMmaOp, 6>(ptr_A, ptr_B, ptr_D);
+}
+
 namespace cutlass
 {
   namespace gemm
@@ -732,15 +741,38 @@ namespace cutlass
               auto shift_amount = (1 - warp_x_group) * 4;
               // warp_subtile_x = 0 or 1; extract the most or least significant 4 bits from local_sparsity_B_doublebuf_indexed
               auto four_bit_group = (local_sparsity_B_doublebuf_indexed & (0xF << shift_amount)) >> shift_amount;
-              if (((four_bit_group >> 3) & 1))
-                potentially_run_mmas<true, MmaIterations, ArchMmaOperator, 0>(ptr_A, ptr_B, ptr_D);
-              if (((four_bit_group >> 2) & 1))
-                potentially_run_mmas<true, MmaIterations, ArchMmaOperator, 2>(ptr_A, ptr_B, ptr_D);
-              if (((four_bit_group >> 1) & 1))
-                potentially_run_mmas<true, MmaIterations, ArchMmaOperator, 4>(ptr_A, ptr_B, ptr_D);
-              if (((four_bit_group >> 0) & 1))
-                potentially_run_mmas<true, MmaIterations, ArchMmaOperator, 6>(ptr_A, ptr_B, ptr_D);
-
+              if (four_bit_group == 0b0000)
+                potentially_run_four_mmas<0, 0, 0, 0, MmaIterations, ArchMmaOperator>(ptr_A, ptr_B, ptr_D);
+              else if (four_bit_group == 0b0001)
+                potentially_run_four_mmas<0, 0, 0, 1, MmaIterations, ArchMmaOperator>(ptr_A, ptr_B, ptr_D);
+              else if (four_bit_group == 0b0010)
+                potentially_run_four_mmas<0, 0, 1, 0, MmaIterations, ArchMmaOperator>(ptr_A, ptr_B, ptr_D);
+              else if (four_bit_group == 0b0011)
+                potentially_run_four_mmas<0, 0, 1, 1, MmaIterations, ArchMmaOperator>(ptr_A, ptr_B, ptr_D);
+              else if (four_bit_group == 0b0100)
+                potentially_run_four_mmas<0, 1, 0, 0, MmaIterations, ArchMmaOperator>(ptr_A, ptr_B, ptr_D);
+              else if (four_bit_group == 0b0101)
+                potentially_run_four_mmas<0, 1, 0, 1, MmaIterations, ArchMmaOperator>(ptr_A, ptr_B, ptr_D);
+              else if (four_bit_group == 0b0110)
+                potentially_run_four_mmas<0, 1, 1, 0, MmaIterations, ArchMmaOperator>(ptr_A, ptr_B, ptr_D);
+              else if (four_bit_group == 0b0111)
+                potentially_run_four_mmas<0, 1, 1, 1, MmaIterations, ArchMmaOperator>(ptr_A, ptr_B, ptr_D);
+              else if (four_bit_group == 0b1000)
+                potentially_run_four_mmas<1, 0, 0, 0, MmaIterations, ArchMmaOperator>(ptr_A, ptr_B, ptr_D);
+              else if (four_bit_group == 0b1001)
+                potentially_run_four_mmas<1, 0, 0, 1, MmaIterations, ArchMmaOperator>(ptr_A, ptr_B, ptr_D);
+              else if (four_bit_group == 0b1010)
+                potentially_run_four_mmas<1, 0, 1, 0, MmaIterations, ArchMmaOperator>(ptr_A, ptr_B, ptr_D);
+              else if (four_bit_group == 0b1011)
+                potentially_run_four_mmas<1, 0, 1, 1, MmaIterations, ArchMmaOperator>(ptr_A, ptr_B, ptr_D);
+              else if (four_bit_group == 0b1100)
+                potentially_run_four_mmas<1, 1, 0, 0, MmaIterations, ArchMmaOperator>(ptr_A, ptr_B, ptr_D);
+              else if (four_bit_group == 0b1101)
+                potentially_run_four_mmas<1, 1, 0, 1, MmaIterations, ArchMmaOperator>(ptr_A, ptr_B, ptr_D);
+              else if (four_bit_group == 0b1110)
+                potentially_run_four_mmas<1, 1, 1, 0, MmaIterations, ArchMmaOperator>(ptr_A, ptr_B, ptr_D);
+              else /*if (four_bit_group == 0b1111)*/
+                potentially_run_four_mmas<1, 1, 1, 1, MmaIterations, ArchMmaOperator>(ptr_A, ptr_B, ptr_D);
               // Except for the last warp-tile, all warp-tiles issue their share of
               // global->shared fragment copies
               if (warp_mma_k == 0)
